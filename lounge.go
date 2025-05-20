@@ -24,7 +24,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// File paths and directories
 const (
 	userDataFile = "log/active_users.json"
 	memberFile   = "membership.csv"
@@ -32,7 +31,6 @@ const (
 	imgBaseDir   = "src"
 )
 
-// Data structures
 type User struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
@@ -61,7 +59,6 @@ type LogEntry struct {
 	UsageTime    string    `json:"usage_time,omitempty"`
 }
 
-// Global variables
 var (
 	allDevices           []Device
 	activeUsers          []User
@@ -84,32 +81,49 @@ var (
 	logTabIndex          int = -1
 )
 
-// Windows Classic Theme implementation
 type classicTheme struct{ fyne.Theme }
 
 func newClassicTheme() fyne.Theme {
 	return &classicTheme{Theme: theme.LightTheme()}
 }
 
-// Customize colors for Windows Classic look
 func (themeInstance *classicTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	// Set Windows classic theme colors
-	if name == theme.ColorNameSelection {
-		return color.NRGBA{R: 0xC0, G: 0xC0, B: 0xE0, A: 0xFF}
-	}
-	if name == theme.ColorNameHover {
+	classicBackground := color.NRGBA{R: 0xC0, G: 0xC0, B: 0xC0, A: 0xFF}
+	classicButtonFace := color.NRGBA{R: 0xD4, G: 0xD0, B: 0xC8, A: 0xFF}
+	classicText := color.Black
+	classicPrimary := color.NRGBA{R: 0x00, G: 0x00, B: 0x80, A: 0xFF}
+	classicDisabledText := color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xFF}
+	classicInputBorder := color.NRGBA{R: 0x40, G: 0x40, B: 0x40, A: 0xFF}
+	classicShadow := color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xFF}
+
+	switch name {
+	case theme.ColorNameBackground:
+		return classicBackground
+	case theme.ColorNameButton:
+		return classicButtonFace
+	case theme.ColorNamePrimary:
+		return classicPrimary
+	case theme.ColorNameHover:
 		return color.NRGBA{R: 0xE0, G: 0xE0, B: 0xF0, A: 0xFF}
+	case theme.ColorNameFocus:
+		return classicPrimary
+	case theme.ColorNameSelection:
+		return classicPrimary
+	case theme.ColorNameShadow:
+		return classicShadow
+	case theme.ColorNameInputBorder:
+		return classicInputBorder
+	case theme.ColorNameDisabled:
+		return classicDisabledText
+	case theme.ColorNamePlaceHolder:
+		return classicDisabledText
+	case theme.ColorNameForeground:
+		return classicText
+	case theme.ColorNameSeparator:
+		return classicInputBorder
+	default:
+		return themeInstance.Theme.Color(name, variant)
 	}
-	if name == theme.ColorNameBackground {
-		return color.NRGBA{R: 0xF0, G: 0xF0, B: 0xF0, A: 0xFF}
-	}
-	if name == theme.ColorNameButton {
-		return color.NRGBA{R: 0xD4, G: 0xD0, B: 0xC8, A: 0xFF}
-	}
-	if name == theme.ColorNamePrimary {
-		return color.NRGBA{R: 0x00, G: 0x00, B: 0x80, A: 0xFF}
-	}
-	return themeInstance.Theme.Color(name, variant)
 }
 
 func (themeInstance *classicTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
@@ -121,17 +135,24 @@ func (themeInstance *classicTheme) Font(style fyne.TextStyle) fyne.Resource {
 }
 
 func (themeInstance *classicTheme) Size(name fyne.ThemeSizeName) float32 {
-	// Adjust sizes for Windows classic look
-	if name == theme.SizeNamePadding {
-		return 6
+	switch name {
+	case theme.SizeNamePadding:
+		return 4
+	case theme.SizeNameInlineIcon:
+		return 20
+	case theme.SizeNameScrollBar:
+		return 16
+	case theme.SizeNameScrollBarSmall:
+		return 12
+	case theme.SizeNameText:
+		return 12
+	case theme.SizeNameInputBorder:
+		return 1
+	default:
+		return themeInstance.Theme.Size(name)
 	}
-	if name == theme.SizeNameInlineIcon {
-		return 24
-	}
-	return themeInstance.Theme.Size(name)
 }
 
-// Log file functions
 func ensureLogDir() error {
 	return os.MkdirAll(logDir, 0755)
 }
@@ -176,7 +197,6 @@ func writeDailyLogEntries(entries []LogEntry) error {
 	return os.WriteFile(filePath, fileData, 0644)
 }
 
-// Record log events for check-in and check-out
 func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTimeForUpdate *time.Time) {
 	logFileMutex.Lock()
 	defer logFileMutex.Unlock()
@@ -193,7 +213,6 @@ func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTime
 	}
 
 	if isCheckIn {
-		// Add check-in entry
 		entries = append(entries, LogEntry{
 			UserName:    user.Name,
 			UserID:      user.ID,
@@ -201,7 +220,6 @@ func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTime
 			CheckInTime: user.CheckInTime,
 		})
 	} else {
-		// Update existing entry with check-out information
 		found := false
 		for i := len(entries) - 1; i >= 0; i-- {
 			entry := entries[i]
@@ -222,12 +240,10 @@ func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTime
 		}
 	}
 
-	// Write updated entries back to file
 	if err := writeDailyLogEntries(entries); err != nil {
 		fmt.Println("Error writing daily log:", err)
 	}
 
-	// Update UI
 	fyne.Do(func() {
 		currentLogEntries = entries
 		if tabs != nil && tabs.Selected() != nil && tabs.Selected().Text == "Log" {
@@ -240,7 +256,6 @@ func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTime
 	})
 }
 
-// Format time duration to readable string
 func formatDuration(d time.Duration) string {
 	d = d.Round(time.Second)
 	h := int(d.Hours())
@@ -256,7 +271,6 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
-// Update log entries cache
 func updateCurrentLogEntriesCache() {
 	entries, err := readDailyLogEntries()
 	if err != nil {
@@ -267,11 +281,9 @@ func updateCurrentLogEntriesCache() {
 	}
 }
 
-// Build log view with table
 func buildLogView() fyne.CanvasObject {
 	updateCurrentLogEntriesCache()
 
-	// Create table for log entries
 	logTable = widget.NewTable(
 		func() (int, int) {
 			return len(currentLogEntries) + 1, 6
@@ -282,7 +294,6 @@ func buildLogView() fyne.CanvasObject {
 		func(id widget.TableCellID, cell fyne.CanvasObject) {
 			label := cell.(*widget.Label)
 
-			// Header row
 			if id.Row == 0 {
 				label.TextStyle.Bold = true
 				switch id.Col {
@@ -302,7 +313,6 @@ func buildLogView() fyne.CanvasObject {
 				return
 			}
 
-			// Data rows
 			label.TextStyle.Bold = false
 			entryIndex := id.Row - 1
 			if entryIndex < len(currentLogEntries) {
@@ -328,7 +338,6 @@ func buildLogView() fyne.CanvasObject {
 			}
 		})
 
-	// Set column widths for better readability
 	logTable.SetColumnWidth(0, 180)
 	logTable.SetColumnWidth(1, 100)
 	logTable.SetColumnWidth(2, 70)
@@ -339,11 +348,9 @@ func buildLogView() fyne.CanvasObject {
 	return container.NewScroll(logTable)
 }
 
-// Load member data from CSV file
 func loadMembers() {
 	f, err := os.Open(memberFile)
 	if err != nil {
-		// Create empty file if it doesn't exist
 		if file, createErr := os.Create(memberFile); createErr == nil {
 			file.Close()
 		}
@@ -353,7 +360,6 @@ func loadMembers() {
 	}
 	defer f.Close()
 
-	// Read CSV content
 	r := csv.NewReader(f)
 	rows, _ := r.ReadAll()
 	members = []Member{}
@@ -367,7 +373,6 @@ func loadMembers() {
 	filterMembers("")
 }
 
-// Add a new member to the CSV file
 func appendMember(m Member) {
 	f, _ := os.OpenFile(memberFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	defer f.Close()
@@ -384,7 +389,6 @@ func appendMember(m Member) {
 	}
 }
 
-// Find member by ID
 func memberByID(id string) *Member {
 	for i := range members {
 		if members[i].ID == id {
@@ -394,11 +398,9 @@ func memberByID(id string) *Member {
 	return nil
 }
 
-// Initialize application data
 func initData() {
 	ensureLogDir()
 
-	// Initialize devices (PCs and Consoles)
 	allDevices = []Device{}
 	for i := 1; i <= 16; i++ {
 		allDevices = append(allDevices, Device{ID: i, Type: "PC", Status: "free", UserID: ""})
@@ -406,14 +408,12 @@ func initData() {
 	allDevices = append(allDevices, Device{ID: 17, Type: "Console", Status: "free", UserID: ""})
 	allDevices = append(allDevices, Device{ID: 18, Type: "Console", Status: "free", UserID: ""})
 
-	// Load active users
 	activeUsers = []User{}
 	if _, err := os.Stat(userDataFile); !os.IsNotExist(err) {
 		f, ferr := os.Open(userDataFile)
 		if ferr == nil {
 			defer f.Close()
 			if json.NewDecoder(f).Decode(&activeUsers) == nil {
-				// Update device status for active users
 				for _, user := range activeUsers {
 					for i := range allDevices {
 						if allDevices[i].ID == user.PCID {
@@ -432,7 +432,6 @@ func initData() {
 	loadMembers()
 }
 
-// Save user data to file
 func saveData() {
 	ensureLogDir()
 	f, err := os.Create(userDataFile)
@@ -447,7 +446,6 @@ func saveData() {
 	}
 }
 
-// Helper functions to find users and devices
 func getUserByID(id string) *User {
 	for i := range activeUsers {
 		if activeUsers[i].ID == id {
@@ -475,9 +473,7 @@ func getDeviceByUserID(uid string) *Device {
 	return nil
 }
 
-// Register a new user (check-in)
 func registerUser(name, id string, deviceID int) error {
-	// Validate input
 	if _, err := strconv.Atoi(id); err != nil {
 		return fmt.Errorf("user ID must be numeric")
 	}
@@ -495,13 +491,11 @@ func registerUser(name, id string, deviceID int) error {
 		return fmt.Errorf("device %d is busy", deviceID)
 	}
 
-	// Update device and user data
 	device.Status = "occupied"
 	device.UserID = id
 	newUser := User{ID: id, Name: name, CheckInTime: time.Now(), PCID: deviceID}
 	activeUsers = append(activeUsers, newUser)
 
-	// Add to member list if new
 	if memberByID(id) == nil {
 		appendMember(Member{Name: name, ID: id})
 	}
@@ -512,9 +506,7 @@ func registerUser(name, id string, deviceID int) error {
 	return nil
 }
 
-// Check out a user
 func checkoutUser(uid string) error {
-	// Validate input
 	if _, err := strconv.Atoi(uid); err != nil {
 		return fmt.Errorf("user ID must be numeric")
 	}
@@ -524,7 +516,6 @@ func checkoutUser(uid string) error {
 		return fmt.Errorf("user ID %s not found", uid)
 	}
 
-	// Find user index
 	idx := -1
 	for i, u := range activeUsers {
 		if u.ID == uid {
@@ -537,10 +528,8 @@ func checkoutUser(uid string) error {
 		return fmt.Errorf("user %s consistency error", uid)
 	}
 
-	// Remember check-in time for logging
 	originalCheckInTime := userToCheckout.CheckInTime
 
-	// Update device status
 	device := getDeviceByUserID(uid)
 	loggedDeviceID := userToCheckout.PCID
 	if device != nil {
@@ -549,7 +538,6 @@ func checkoutUser(uid string) error {
 		device.UserID = ""
 	}
 
-	// Remove user from active users
 	activeUsers = append(activeUsers[:idx], activeUsers[idx+1:]...)
 	saveData()
 
@@ -558,28 +546,23 @@ func checkoutUser(uid string) error {
 	return nil
 }
 
-// Format duration
 func dur(t time.Time) string {
 	return formatDuration(time.Since(t))
 }
 
-// DeviceButton represents an interactive device button in the UI
 type DeviceButton struct {
 	widget.BaseWidget
 	device *Device
 }
 
-// Create a new device button
 func NewDeviceButton(d *Device) *DeviceButton {
 	button := &DeviceButton{device: d}
 	button.ExtendBaseWidget(button)
 	return button
 }
 
-// Handle tap/click event
 func (button *DeviceButton) Tapped(event *fyne.PointEvent) {
 	if button.device.Status == "occupied" {
-		// Show checkout dialog for occupied device
 		user := getUserByID(button.device.UserID)
 		name := "Unknown"
 		if user != nil {
@@ -595,30 +578,21 @@ func (button *DeviceButton) Tapped(event *fyne.PointEvent) {
 				}
 			}, mainWindow)
 	} else {
-		// Show check-in dialog for free device
 		showCheckInDialogShared(button.device.ID, true)
 	}
 }
 
-// Implement required interface methods with meaningful names
-func (button *DeviceButton) Dragged(event *fyne.DragEvent) {
-}
+func (button *DeviceButton) Dragged(event *fyne.DragEvent) {}
 
-func (button *DeviceButton) DragEnd() {
-}
+func (button *DeviceButton) DragEnd() {}
 
-func (button *DeviceButton) MouseIn(event *desktop.MouseEvent) {
-}
+func (button *DeviceButton) MouseIn(event *desktop.MouseEvent) {}
 
-func (button *DeviceButton) MouseMoved(event *desktop.MouseEvent) {
-}
+func (button *DeviceButton) MouseMoved(event *desktop.MouseEvent) {}
 
-func (button *DeviceButton) MouseOut() {
-}
+func (button *DeviceButton) MouseOut() {}
 
-// Create renderer for device button
 func (button *DeviceButton) CreateRenderer() fyne.WidgetRenderer {
-	// Load appropriate image based on device type
 	var imgPath string
 	if button.device.Type == "PC" {
 		imgPath = filepath.Join(imgBaseDir, "free.png")
@@ -630,7 +604,6 @@ func (button *DeviceButton) CreateRenderer() fyne.WidgetRenderer {
 		fmt.Printf("Warning: %s not found\n", imgPath)
 	}
 
-	// Create image and label
 	img := canvas.NewImageFromFile(imgPath)
 	img.FillMode = canvas.ImageFillContain
 	img.SetMinSize(fyne.NewSize(48, 48))
@@ -638,13 +611,11 @@ func (button *DeviceButton) CreateRenderer() fyne.WidgetRenderer {
 	label := widget.NewLabel(strconv.Itoa(button.device.ID))
 	label.TextStyle = fyne.TextStyle{Bold: true}
 
-	// Create container with image and label
 	content := container.NewHBox(
 		img,
 		container.NewPadded(label),
 	)
 
-	// Create and initialize renderer
 	renderer := &deviceRenderer{
 		button:  button,
 		img:     img,
@@ -660,7 +631,6 @@ func (button *DeviceButton) Refresh() {
 	button.BaseWidget.Refresh()
 }
 
-// DeviceRenderer handles rendering of device buttons
 type deviceRenderer struct {
 	button  *DeviceButton
 	img     *canvas.Image
@@ -682,7 +652,6 @@ func (renderer *deviceRenderer) MinSize() fyne.Size {
 }
 
 func (renderer *deviceRenderer) Refresh() {
-	// Update image based on device status
 	var imgPath string
 	if renderer.button.device.Status == "free" {
 		if renderer.button.device.Type == "PC" {
@@ -713,27 +682,21 @@ func (renderer *deviceRenderer) Objects() []fyne.CanvasObject {
 	return renderer.objects
 }
 
-func (renderer *deviceRenderer) Destroy() {
-	// Nothing to clean up
-}
+func (renderer *deviceRenderer) Destroy() {}
 
 func (renderer *deviceRenderer) BackgroundColor() color.Color {
 	return color.Transparent
 }
 
-// Build device room layout
 func buildDeviceRoom() *fyne.Container {
 	deviceButtons := make(map[int]*DeviceButton)
 
-	// Create button for each device
 	for i := range allDevices {
 		deviceButtons[allDevices[i].ID] = NewDeviceButton(&allDevices[i])
 	}
 
-	// Create layout with rows
 	mainContainer := container.NewVBox()
 
-	// Add device button rows with proper spacing
 	row1 := container.NewHBox(
 		container.NewPadded(deviceButtons[1]),
 		container.NewPadded(deviceButtons[2]),
@@ -775,7 +738,6 @@ func buildDeviceRoom() *fyne.Container {
 	return mainContainer
 }
 
-// Build active users view with improved styling
 func buildActiveUsersView() fyne.CanvasObject {
 	if len(activeUsers) == 0 {
 		activeUserList = nil
@@ -786,13 +748,11 @@ func buildActiveUsersView() fyne.CanvasObject {
 		)
 	}
 
-	// Create list of active users with better styling
 	activeUserList = widget.NewList(
 		func() int {
 			return len(activeUsers)
 		},
 		func() fyne.CanvasObject {
-			// Create a simple container with labels
 			return container.NewVBox(
 				widget.NewLabelWithStyle("User Information", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 				container.NewHBox(widget.NewLabel("Name:"), widget.NewLabel("")),
@@ -807,14 +767,12 @@ func buildActiveUsersView() fyne.CanvasObject {
 				user := activeUsers[id]
 				container := item.(*fyne.Container)
 
-				// Get the labels safely
 				nameValueLabel := container.Objects[1].(*fyne.Container).Objects[1].(*widget.Label)
 				idValueLabel := container.Objects[2].(*fyne.Container).Objects[1].(*widget.Label)
 				deviceValueLabel := container.Objects[3].(*fyne.Container).Objects[1].(*widget.Label)
 				checkInValueLabel := container.Objects[4].(*fyne.Container).Objects[1].(*widget.Label)
 				usageValueLabel := container.Objects[5].(*fyne.Container).Objects[1].(*widget.Label)
 
-				// Update label values
 				nameValueLabel.SetText(user.Name)
 				idValueLabel.SetText(user.ID)
 
@@ -834,17 +792,14 @@ func buildActiveUsersView() fyne.CanvasObject {
 	return container.NewScroll(activeUserList)
 }
 
-// Filter members based on search text
 func filterMembers(searchText string) {
 	searchText = strings.ToLower(strings.TrimSpace(searchText))
 	newDisplayMembers := []Member{}
 
 	if searchText == "" {
-		// Show all members when search is empty
 		newDisplayMembers = make([]Member, len(members))
 		copy(newDisplayMembers, members)
 	} else {
-		// Filter members by name or ID
 		for _, m := range members {
 			if strings.Contains(strings.ToLower(m.Name), searchText) ||
 				strings.Contains(strings.ToLower(m.ID), searchText) {
@@ -859,14 +814,11 @@ func filterMembers(searchText string) {
 	}
 }
 
-// Build membership view with search and table
 func buildMembershipView() fyne.CanvasObject {
-	// Create search entry
 	memberSearchEntry = widget.NewEntry()
 	memberSearchEntry.SetPlaceHolder("Search Name/ID...")
 	memberSearchEntry.OnChanged = filterMembers
 
-	// Create member table
 	memberTable = widget.NewTable(
 		func() (int, int) {
 			return len(displayMembers) + 1, 2
@@ -877,7 +829,6 @@ func buildMembershipView() fyne.CanvasObject {
 		func(id widget.TableCellID, o fyne.CanvasObject) {
 			label := o.(*widget.Label)
 
-			// Header row styling
 			if id.Row == 0 {
 				label.TextStyle.Bold = true
 				if id.Col == 0 {
@@ -888,7 +839,6 @@ func buildMembershipView() fyne.CanvasObject {
 				return
 			}
 
-			// Data rows
 			label.TextStyle.Bold = false
 			if id.Row-1 < len(displayMembers) {
 				member := displayMembers[id.Row-1]
@@ -903,7 +853,6 @@ func buildMembershipView() fyne.CanvasObject {
 		},
 	)
 
-	// Set column widths
 	memberTable.SetColumnWidth(0, 240)
 	memberTable.SetColumnWidth(1, 160)
 
@@ -911,13 +860,11 @@ func buildMembershipView() fyne.CanvasObject {
 		filterMembers("")
 	}
 
-	// Create bordered container for table
 	tableContainer := container.NewBorder(
 		nil, nil, nil, nil,
 		container.NewScroll(memberTable),
 	)
 
-	// Add search entry at top
 	return container.NewBorder(
 		container.NewPadded(memberSearchEntry),
 		nil, nil, nil,
@@ -925,18 +872,14 @@ func buildMembershipView() fyne.CanvasObject {
 	)
 }
 
-// Show check-in dialog
 func showCheckInDialogShared(deviceID int, deviceFixed bool) {
-	// Create search entry for finding members
 	searchEntry := widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search Member...")
 
-	// Create form fields
 	nameEntry := widget.NewEntry()
 	idEntry := widget.NewEntry()
 	deviceEntry := widget.NewEntry()
 
-	// Set device ID if fixed
 	if deviceFixed {
 		deviceEntry.SetText(strconv.Itoa(deviceID))
 		deviceEntry.Disable()
@@ -944,7 +887,6 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 		deviceEntry.SetPlaceHolder("Enter Device ID")
 	}
 
-	// Setup filtered members list
 	var filteredMembers []Member
 	var resultsList *widget.List
 
@@ -964,12 +906,10 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 		},
 	)
 
-	// Make results scrollable
 	scrollableResults := container.NewScroll(resultsList)
 	scrollableResults.SetMinSize(fyne.NewSize(380, 80))
 	scrollableResults.Hide()
 
-	// Handle selection from results list
 	resultsList.OnSelected = func(id widget.ListItemID) {
 		if id >= 0 && id < len(filteredMembers) {
 			selected := filteredMembers[id]
@@ -983,7 +923,6 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 		}
 	}
 
-	// Handle search entry changes
 	searchEntry.OnChanged = func(s string) {
 		s = strings.ToLower(strings.TrimSpace(s))
 		nameEntry.Enable()
@@ -1010,10 +949,8 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 		}
 	}
 
-	// Create dialog reference
 	var dialogRef dialog.Dialog
 
-	// Create form for check-in
 	formItems := []*widget.FormItem{
 		{Text: "Name", Widget: nameEntry},
 		{Text: "User ID", Widget: idEntry},
@@ -1024,11 +961,9 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 		Items:      formItems,
 		SubmitText: "Check In",
 		OnSubmit: func() {
-			// Get form values
 			userIDStr := strings.TrimSpace(idEntry.Text)
 			userName := strings.TrimSpace(nameEntry.Text)
 
-			// Validate inputs
 			if userName == "" || userIDStr == "" {
 				dialog.ShowError(fmt.Errorf("Name and ID are required"), mainWindow)
 				return
@@ -1039,7 +974,6 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 				return
 			}
 
-			// Get device ID
 			targetDeviceID := 0
 			var err error
 
@@ -1059,20 +993,17 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 				}
 			}
 
-			// Register user
 			if err = registerUser(userName, userIDStr, targetDeviceID); err != nil {
 				dialog.ShowError(err, mainWindow)
 				return
 			}
 
-			// Close dialog on success
 			if dialogRef != nil {
 				dialogRef.Hide()
 			}
 		},
 	}
 
-	// Build dialog content
 	dialogContent := container.NewVBox(
 		widget.NewLabel("Search/Enter Details:"),
 		searchEntry,
@@ -1080,25 +1011,21 @@ func showCheckInDialogShared(deviceID int, deviceFixed bool) {
 		form,
 	)
 
-	// Create and show dialog
 	dialogRef = dialog.NewCustom("Check In", "Cancel", dialogContent, mainWindow)
 	dialogRef.Resize(fyne.NewSize(460, 390))
 	dialogRef.Show()
 }
 
-// Show check-in dialog for any device
 func showCheckInDialog() {
 	showCheckInDialogShared(0, false)
 }
 
-// Show check-out dialog
 func showCheckOutDialog() {
 	if len(activeUsers) == 0 {
 		dialog.ShowInformation("Check Out", "No active users.", mainWindow)
 		return
 	}
 
-	// Create lists of active users for dropdown
 	activeUserDisp := make([]string, len(activeUsers))
 	activeUserIDs := make([]string, len(activeUsers))
 
@@ -1108,14 +1035,11 @@ func showCheckOutDialog() {
 		activeUserIDs[i] = u.ID
 	}
 
-	// Create selection dropdown
 	idSelector := widget.NewSelectEntry(activeUserDisp)
 	idSelector.SetPlaceHolder("Select User")
 
-	// Create dialog reference
 	var dialogRef dialog.Dialog
 
-	// Create form for checkout
 	form := &widget.Form{
 		Items: []*widget.FormItem{
 			{Text: "User", Widget: idSelector},
@@ -1129,7 +1053,6 @@ func showCheckOutDialog() {
 				return
 			}
 
-			// Find selected user ID
 			var uidToCheckout string
 			found := false
 
@@ -1146,49 +1069,40 @@ func showCheckOutDialog() {
 				return
 			}
 
-			// Check out the user
 			if err := checkoutUser(uidToCheckout); err != nil {
 				dialog.ShowError(err, mainWindow)
 				return
 			}
 
-			// Close dialog on success
 			if dialogRef != nil {
 				dialogRef.Hide()
 			}
 		},
 	}
 
-	// Create and show dialog
 	dialogRef = dialog.NewCustom("Check Out", "Cancel", form, mainWindow)
 	dialogRef.Resize(fyne.NewSize(400, 170))
 	dialogRef.Show()
 }
 
 func main() {
-	// Initialize data
 	initData()
 
-	// Ensure image directory exists
 	if err := os.MkdirAll(imgBaseDir, 0755); err != nil {
 		fmt.Printf("Warning: Unable to create image directory '%s': %v\n", imgBaseDir, err)
 	}
 
-	// Create app with classic theme
 	myApp := app.New()
 	myApp.Settings().SetTheme(newClassicTheme())
 
-	// Create main window
 	mainWindow = myApp.NewWindow("Lounge Management System")
 	mainWindow.Resize(fyne.NewSize(1080, 720))
 
-	// Build UI components
 	deviceRoom = buildDeviceRoom()
 	initialActiveUsersView := buildActiveUsersView()
 	membershipView := buildMembershipView()
 	logView := buildLogView()
 
-	// Create toolbar buttons
 	checkInBtn := widget.NewButtonWithIcon("Check In", theme.ContentAddIcon(), showCheckInDialog)
 	checkOutBtn := widget.NewButtonWithIcon("Check Out", theme.ContentRemoveIcon(), showCheckOutDialog)
 	refreshBtn := widget.NewButtonWithIcon("Refresh Data", theme.ViewRefreshIcon(), func() {
@@ -1196,7 +1110,6 @@ func main() {
 		refreshTrigger <- true
 	})
 
-	// Create toolbar
 	toolbar := container.NewHBox(
 		checkInBtn,
 		checkOutBtn,
@@ -1204,12 +1117,10 @@ func main() {
 		refreshBtn,
 	)
 
-	// Create status bar labels
 	totalLbl := widget.NewLabel("")
 	occLbl := widget.NewLabel("")
 	userLbl := widget.NewLabel("")
 
-	// Function to update status bar
 	updateStatus := func() {
 		occupiedCount := 0
 		for _, d := range allDevices {
@@ -1224,7 +1135,6 @@ func main() {
 
 	updateStatus()
 
-	// Create status bar
 	statusBar := container.NewHBox(
 		totalLbl,
 		widget.NewLabel(" | "),
@@ -1233,7 +1143,6 @@ func main() {
 		userLbl,
 	)
 
-	// Create tabs
 	tabs = container.NewAppTabs(
 		container.NewTabItem("Device Status", container.NewScroll(deviceRoom)),
 		container.NewTabItem("Active Users", initialActiveUsersView),
@@ -1241,7 +1150,6 @@ func main() {
 		container.NewTabItem("Log", logView),
 	)
 
-	// Store tab indices for reference
 	for i, item := range tabs.Items {
 		switch item.Text {
 		case "Device Status":
@@ -1255,10 +1163,8 @@ func main() {
 		}
 	}
 
-	// Set tab location to top
 	tabs.SetTabLocation(container.TabLocationTop)
 
-	// Handle tab selection
 	tabs.OnSelected = func(ti *container.TabItem) {
 		if ti.Text == "Log" && logTabIndex != -1 {
 			updateCurrentLogEntriesCache()
@@ -1272,17 +1178,13 @@ func main() {
 		}
 	}
 
-	// Create layout
 	topBar := container.NewVBox(toolbar, widget.NewSeparator())
 	bottomBar := container.NewVBox(widget.NewSeparator(), statusBar)
 	content := container.NewBorder(topBar, bottomBar, nil, nil, tabs)
 
-	// Set content and show window
 	mainWindow.SetContent(content)
 
-	// Start background update routine
 	go func() {
-		// Create tickers for updates
 		uiUpdateTicker := time.NewTicker(time.Second)
 		dailyLogCheckTicker := time.NewTicker(time.Minute * 5)
 		lastLogFileDate := time.Now().Format("2006-01-02")
@@ -1293,7 +1195,6 @@ func main() {
 		for {
 			select {
 			case <-uiUpdateTicker.C:
-				// Update active users list every second
 				fyne.Do(func() {
 					if tabs.Selected() != nil && tabs.Selected().Text == "Active Users" {
 						if activeUserList != nil {
@@ -1303,7 +1204,6 @@ func main() {
 				})
 
 			case <-dailyLogCheckTicker.C:
-				// Check for new log file every 5 minutes
 				fyne.Do(func() {
 					currentDate := time.Now().Format("2006-01-02")
 					if currentDate != lastLogFileDate {
@@ -1318,9 +1218,7 @@ func main() {
 				})
 
 			case <-refreshTrigger:
-				// Update UI when triggered
 				fyne.Do(func() {
-					// Update device status view
 					if deviceStatusTabIndex != -1 {
 						newDeviceRoomContent := buildDeviceRoom()
 						if scroll, ok := tabs.Items[deviceStatusTabIndex].Content.(*container.Scroll); ok {
@@ -1332,15 +1230,12 @@ func main() {
 						deviceRoom = newDeviceRoomContent
 					}
 
-					// Update active users view
 					if activeUsersTabIndex != -1 {
 						tabs.Items[activeUsersTabIndex].Content = buildActiveUsersView()
 					}
 
-					// Update status bar
 					updateStatus()
 
-					// Update log if pending
 					if logRefreshPending {
 						updateCurrentLogEntriesCache()
 						if tabs.Selected() != nil && tabs.Selected().Text == "Log" && logTable != nil {
@@ -1348,11 +1243,9 @@ func main() {
 						}
 						logRefreshPending = false
 					}
-
-					// Refresh member filter
-					filterMembers(memberSearchEntry.Text)
-
-					// Refresh tabs
+					if memberSearchEntry != nil {
+						filterMembers(memberSearchEntry.Text)
+					}
 					tabs.Refresh()
 				})
 			}
