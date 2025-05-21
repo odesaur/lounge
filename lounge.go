@@ -164,14 +164,15 @@ func (themeInstance *classicTheme) Size(name fyne.ThemeSizeName) float32 {
 
 type ActiveUserNetworkWidget struct {
 	widget.BaseWidget
-	users          []User
-	pcPositions    map[string]fyne.Position
-	rng            *rand.Rand
-	busyPCImage    fyne.Resource
-	containerSize  fyne.Size
-	draggingUserID string
-	dragOffset     fyne.Position
-	isDragging     bool
+	users            []User
+	pcPositions      map[string]fyne.Position
+	rng              *rand.Rand
+	busyPCImage      fyne.Resource
+	consoleBusyImage fyne.Resource // Added for console-specific busy image
+	containerSize    fyne.Size
+	draggingUserID   string
+	dragOffset       fyne.Position
+	isDragging       bool
 }
 
 func NewActiveUserNetworkWidget() *ActiveUserNetworkWidget {
@@ -187,6 +188,15 @@ func NewActiveUserNetworkWidget() *ActiveUserNetworkWidget {
 		fmt.Printf("Warning: busy.png not found at %s. Using fallback.\n", busyPCPath)
 		w.busyPCImage = theme.ComputerIcon()
 	}
+
+	consoleBusyPath := filepath.Join(imgBaseDir, "console_busy.png")
+	if _, err := os.Stat(consoleBusyPath); err == nil {
+		w.consoleBusyImage, _ = fyne.LoadResourceFromPath(consoleBusyPath)
+	} else {
+		fmt.Printf("Warning: console_busy.png not found at %s. Using busyPCImage as fallback for consoles.\n", consoleBusyPath)
+		w.consoleBusyImage = w.busyPCImage // Fallback to the general busy image if console specific one is missing
+	}
+
 	w.ExtendBaseWidget(w)
 	return w
 }
@@ -206,13 +216,13 @@ func (w *ActiveUserNetworkWidget) UpdateUsers(users []User) {
 	if len(users) != len(w.users) {
 		usersActuallyChanged = true
 	} else {
-		for _, u := range users { // Check if any user ID in new list was not in old
+		for _, u := range users {
 			if _, exists := existingUserIDsInWidget[u.ID]; !exists {
 				usersActuallyChanged = true
 				break
 			}
 		}
-		if !usersActuallyChanged { // If sets of IDs are same, check if any old ID is not in new (user removed)
+		if !usersActuallyChanged {
 			for oldID := range existingUserIDsInWidget {
 				if _, exists := newUsersMap[oldID]; !exists {
 					usersActuallyChanged = true
@@ -222,7 +232,6 @@ func (w *ActiveUserNetworkWidget) UpdateUsers(users []User) {
 		}
 	}
 
-	// Identify users to remove (whose positions should be cleared from pcPositions)
 	for userID := range w.pcPositions {
 		if _, exists := newUsersMap[userID]; !exists {
 			delete(w.pcPositions, userID)
@@ -269,34 +278,31 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 		return
 	}
 
-	if len(w.users) == 1 && len(usersToPlace) == 1 { // Only user, and needs placing
+	if len(w.users) == 1 && len(usersToPlace) == 1 {
 		w.pcPositions[usersToPlace[0].ID] = center
 		return
 	}
 
-	// Ensure users[0] (if it exists and needs placing) is at center.
-	// This is key for the hub-spoke model.
 	if len(w.users) > 0 {
 		firstUserID := w.users[0].ID
-		if _, needsPlacing := w.pcPositions[firstUserID]; !needsPlacing {
-			isFirstUserInToPlaceList := false
+		// Check if the first user is in the list of users that need placing
+		needsPlacing := false
+		for _, u := range usersToPlace {
+			if u.ID == firstUserID {
+				needsPlacing = true
+				break
+			}
+		}
+		// If the first user exists, needs placing, AND doesn't already have a position (e.g., after reset)
+		if _, alreadyHasPos := w.pcPositions[firstUserID]; !alreadyHasPos && needsPlacing {
+			w.pcPositions[firstUserID] = center
+			tempUsersToPlace := []User{}
 			for _, u := range usersToPlace {
-				if u.ID == firstUserID {
-					isFirstUserInToPlaceList = true
-					break
+				if u.ID != firstUserID {
+					tempUsersToPlace = append(tempUsersToPlace, u)
 				}
 			}
-			if isFirstUserInToPlaceList {
-				w.pcPositions[firstUserID] = center
-				// Remove firstUser from usersToPlace as it's now handled
-				tempUsersToPlace := []User{}
-				for _, u := range usersToPlace {
-					if u.ID != firstUserID {
-						tempUsersToPlace = append(tempUsersToPlace, u)
-					}
-				}
-				usersToPlace = tempUsersToPlace
-			}
+			usersToPlace = tempUsersToPlace
 		}
 	}
 	if len(usersToPlace) == 0 {
@@ -456,9 +462,6 @@ func (r *activeUserNetworkRenderer) Layout(size fyne.Size) {
 		oldSize := r.widget.containerSize
 		r.widget.containerSize = size
 		if oldSize.IsZero() || math.Abs(float64(oldSize.Width-size.Width)) > 50 || math.Abs(float64(oldSize.Height-size.Height)) > 50 {
-			// If size changed significantly, it's good to recalculate for new users or adjust existing.
-			// The current calculatePCPositions will only add new users.
-			// A full reset might be desired: r.widget.pcPositions = make(map[string]fyne.Position)
 			r.widget.calculatePCPositions()
 		}
 	}
@@ -522,11 +525,20 @@ func (r *activeUserNetworkRenderer) Refresh() {
 	for _, user := range r.widget.users {
 		pcPos, ok := r.widget.pcPositions[user.ID]
 		if !ok {
+			// Silently skip drawing if position is missing
 			// fmt.Printf("DEBUG: Position for user %s (ID: %s) not found. Skipping draw.\n", user.Name, user.ID)
 			continue
 		}
 
-		pcIcon := canvas.NewImageFromResource(r.widget.busyPCImage)
+		var currentBusyImage fyne.Resource = r.widget.busyPCImage
+		device := getDeviceByID(user.PCID)
+		if device != nil && device.Type == "Console" {
+			if r.widget.consoleBusyImage != nil {
+				currentBusyImage = r.widget.consoleBusyImage
+			}
+		}
+
+		pcIcon := canvas.NewImageFromResource(currentBusyImage)
 		pcIcon.Resize(fyne.NewSize(pcImageSize, pcImageSize))
 		pcIcon.Move(fyne.NewPos(pcPos.X-pcImageSize/2, pcPos.Y-pcImageSize/2))
 		r.objects = append(r.objects, pcIcon)
@@ -1388,7 +1400,12 @@ func showCheckOutDialog() {
 	activeUserIDs := make([]string, len(activeUsers))
 
 	for index, user := range activeUsers {
-		activeUserDisplayStrings[index] = fmt.Sprintf("%s (ID: %s, Device: %d)", user.Name, user.ID, user.PCID)
+		maxNameLen := 25
+		displayName := user.Name
+		if len(displayName) > maxNameLen {
+			displayName = displayName[:maxNameLen-3] + "..."
+		}
+		activeUserDisplayStrings[index] = fmt.Sprintf("%s (ID: %s, PC: %d)", displayName, user.ID, user.PCID)
 		activeUserIDs[index] = user.ID
 	}
 
@@ -1399,7 +1416,7 @@ func showCheckOutDialog() {
 		{Text: "User:", Widget: idSelector},
 	}
 
-	dialog.ShowForm("Check Out User", "Check Out", "Cancel", formItems, func(confirmed bool) {
+	d := dialog.NewForm("Check Out User", "Check Out", "Cancel", formItems, func(confirmed bool) {
 		if !confirmed {
 			return
 		}
@@ -1420,7 +1437,7 @@ func showCheckOutDialog() {
 		}
 
 		if !foundSelection {
-			dialog.ShowError(fmt.Errorf("invalid user selection or typed entry"), mainWindow)
+			dialog.ShowError(fmt.Errorf("invalid user selection"), mainWindow)
 			return
 		}
 
@@ -1428,6 +1445,9 @@ func showCheckOutDialog() {
 			dialog.ShowError(err, mainWindow)
 		}
 	}, mainWindow)
+
+	d.Resize(fyne.NewSize(450, d.MinSize().Height))
+	d.Show()
 }
 
 func main() {
@@ -1462,30 +1482,19 @@ func main() {
 
 	checkInButton := widget.NewButtonWithIcon("Check In", theme.ContentAddIcon(), showCheckInDialog)
 	checkOutButton := widget.NewButtonWithIcon("Check Out", theme.ContentRemoveIcon(), showCheckOutDialog)
-	refreshButton := widget.NewButtonWithIcon("Refresh Data", theme.ViewRefreshIcon(), func() {
-		initData()
-		refreshTrigger <- true
-	})
-	toolbar := container.NewHBox(checkInButton, checkOutButton, layout.NewSpacer(), refreshButton, resetLayoutButton)
+	// Removed Refresh Data button
+	toolbar := container.NewHBox(checkInButton, checkOutButton, layout.NewSpacer(), resetLayoutButton)
 
 	totalDevicesLabel := widget.NewLabel("")
-	occupiedDevicesLabel := widget.NewLabel("")
-	activeUsersLabel := widget.NewLabel("")
+	activeUsersLabel := widget.NewLabel("") // Occupied label removed
 
 	updateStatusLabels := func() {
-		occupiedCount := 0
-		for _, device := range allDevices {
-			if device.Status == "occupied" {
-				occupiedCount++
-			}
-		}
 		totalDevicesLabel.SetText(fmt.Sprintf("Total Devices: %d", len(allDevices)))
-		occupiedDevicesLabel.SetText(fmt.Sprintf("Occupied: %d", occupiedCount))
 		activeUsersLabel.SetText(fmt.Sprintf("Active Users: %d", len(activeUsers)))
 	}
 	updateStatusLabels()
 
-	statusBar := container.NewHBox(totalDevicesLabel, widget.NewLabel(" | "), occupiedDevicesLabel, widget.NewLabel(" | "), activeUsersLabel)
+	statusBar := container.NewHBox(totalDevicesLabel, widget.NewLabel(" | "), activeUsersLabel)
 
 	tabs = container.NewAppTabs(
 		container.NewTabItem("Device Status", deviceStatusTabContent),
