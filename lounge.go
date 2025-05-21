@@ -71,18 +71,20 @@ type LogEntry struct {
 }
 
 var (
-	allDevices                []Device
-	activeUsers               []User
-	members                   []Member
-	displayMembers            []Member
+	allDevices  []Device
+	activeUsers []User
+	members     []Member
+	// displayMembers is now specific to the fzf-like search on membership tab
+	membershipFilteredMembers []Member
 	mainWindow                fyne.Window
-	memberTable               *widget.Table
-	logTable                  *widget.Table
-	refreshTrigger            = make(chan bool, 1)
-	logRefreshPending         = false
-	logFileMutex              sync.Mutex
-	currentLogEntries         []LogEntry
-	memberSearchEntry         *widget.Entry
+	// memberTable is removed as we are changing the UI
+	logTable          *widget.Table
+	refreshTrigger    = make(chan bool, 1)
+	logRefreshPending = false
+	logFileMutex      sync.Mutex
+	currentLogEntries []LogEntry
+	// memberSearchEntry is still used, but in a different context for fzf-style
+	fzfMemberSearchEntry      *widget.Entry
 	tabs                      *container.AppTabs
 	deviceStatusTabIndex      int = -1
 	activeUsersTabIndex       int = -1
@@ -90,8 +92,11 @@ var (
 	logTabIndex               int = -1
 	deviceHoverDetailLabel    *widget.Label
 	activeUserNetworkInstance *ActiveUserNetworkWidget
+	membershipResultsList     *widget.List  // For the fzf-style list
+	membershipDetailLabel     *widget.Label // To show details of selected member
 )
 
+// ... (classicTheme struct and its methods remain the same) ...
 type classicTheme struct{ fyne.Theme }
 
 func newClassicTheme() fyne.Theme { return &classicTheme{Theme: theme.LightTheme()} }
@@ -162,13 +167,14 @@ func (themeInstance *classicTheme) Size(name fyne.ThemeSizeName) float32 {
 	}
 }
 
+// ... (ActiveUserNetworkWidget and its methods remain the same) ...
 type ActiveUserNetworkWidget struct {
 	widget.BaseWidget
 	users            []User
 	pcPositions      map[string]fyne.Position
 	rng              *rand.Rand
 	busyPCImage      fyne.Resource
-	consoleBusyImage fyne.Resource // Added for console-specific busy image
+	consoleBusyImage fyne.Resource
 	containerSize    fyne.Size
 	draggingUserID   string
 	dragOffset       fyne.Position
@@ -194,7 +200,7 @@ func NewActiveUserNetworkWidget() *ActiveUserNetworkWidget {
 		w.consoleBusyImage, _ = fyne.LoadResourceFromPath(consoleBusyPath)
 	} else {
 		fmt.Printf("Warning: console_busy.png not found at %s. Using busyPCImage as fallback for consoles.\n", consoleBusyPath)
-		w.consoleBusyImage = w.busyPCImage // Fallback to the general busy image if console specific one is missing
+		w.consoleBusyImage = w.busyPCImage
 	}
 
 	w.ExtendBaseWidget(w)
@@ -285,7 +291,6 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 
 	if len(w.users) > 0 {
 		firstUserID := w.users[0].ID
-		// Check if the first user is in the list of users that need placing
 		needsPlacing := false
 		for _, u := range usersToPlace {
 			if u.ID == firstUserID {
@@ -293,7 +298,6 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 				break
 			}
 		}
-		// If the first user exists, needs placing, AND doesn't already have a position (e.g., after reset)
 		if _, alreadyHasPos := w.pcPositions[firstUserID]; !alreadyHasPos && needsPlacing {
 			w.pcPositions[firstUserID] = center
 			tempUsersToPlace := []User{}
@@ -525,8 +529,6 @@ func (r *activeUserNetworkRenderer) Refresh() {
 	for _, user := range r.widget.users {
 		pcPos, ok := r.widget.pcPositions[user.ID]
 		if !ok {
-			// Silently skip drawing if position is missing
-			// fmt.Printf("DEBUG: Position for user %s (ID: %s) not found. Skipping draw.\n", user.Name, user.ID)
 			continue
 		}
 
@@ -618,7 +620,10 @@ func (w *ActiveUserNetworkWidget) CreateRenderer() fyne.WidgetRenderer {
 	return r
 }
 
+// ... (ensureLogDir to getFormattedUsageDuration remain the same) ...
+
 func ensureLogDir() error { return os.MkdirAll(logDir, 0755) }
+
 func getLogFilePath() string {
 	today := time.Now().Format("2006-01-02")
 	return filepath.Join(logDir, fmt.Sprintf("lounge-%s.json", today))
@@ -792,7 +797,8 @@ func loadMembers() {
 			newMemberFile.Close()
 		}
 		members = []Member{}
-		displayMembers = []Member{}
+		// displayMembers is now membershipFilteredMembers
+		membershipFilteredMembers = []Member{}
 		return
 	}
 	defer memberCsvFile.Close()
@@ -804,7 +810,8 @@ func loadMembers() {
 			members = append(members, Member{Name: row[0], ID: row[1]})
 		}
 	}
-	filterMembers("")
+	// Initialize with no filter for fzf style
+	membershipFilteredMembers = []Member{}
 }
 
 func appendMember(memberToAppend Member) {
@@ -826,10 +833,9 @@ func appendMember(memberToAppend Member) {
 	}
 
 	members = append(members, memberToAppend)
-	if memberSearchEntry != nil {
-		filterMembers(memberSearchEntry.Text)
-	} else {
-		filterMembers("")
+	// If fzfMemberSearchEntry is active, re-filter
+	if fzfMemberSearchEntry != nil && membershipResultsList != nil {
+		filterFzfMembers(fzfMemberSearchEntry.Text)
 	}
 }
 
@@ -841,6 +847,100 @@ func memberByID(id string) *Member {
 	}
 	return nil
 }
+
+// This function is now specific to the FZF-style membership tab search
+func filterFzfMembers(searchTextValue string) {
+	searchTextValue = strings.ToLower(strings.TrimSpace(searchTextValue))
+	newFilteredMembers := []Member{}
+	if searchTextValue != "" { // Only show results if there's search text
+		for _, member := range members {
+			if strings.Contains(strings.ToLower(member.Name), searchTextValue) || strings.Contains(strings.ToLower(member.ID), searchTextValue) {
+				newFilteredMembers = append(newFilteredMembers, member)
+			}
+		}
+	}
+	membershipFilteredMembers = newFilteredMembers
+	if membershipResultsList != nil {
+		membershipResultsList.Refresh()
+		if len(membershipFilteredMembers) == 0 && searchTextValue == "" {
+			membershipResultsList.Hide() // Hide if search is empty and no results
+			if membershipDetailLabel != nil {
+				membershipDetailLabel.SetText("") // Clear detail if search is cleared
+			}
+		} else {
+			membershipResultsList.Show()
+		}
+	}
+}
+
+func buildMembershipView() fyne.CanvasObject {
+	fzfMemberSearchEntry = widget.NewEntry()
+	fzfMemberSearchEntry.SetPlaceHolder("Search Members (Name/ID)...")
+
+	membershipFilteredMembers = []Member{} // Initialize as empty
+
+	membershipDetailLabel = widget.NewLabel("Select a member from the list to see details.")
+	membershipDetailLabel.Wrapping = fyne.TextWrapWord
+	membershipDetailLabel.Alignment = fyne.TextAlignCenter
+
+	membershipResultsList = widget.NewList(
+		func() int { return len(membershipFilteredMembers) },
+		func() fyne.CanvasObject {
+			return container.NewBorder(
+				nil, nil, widget.NewLabel("Name Holder"), widget.NewLabel("ID Holder"),
+			)
+		},
+		func(itemID widget.ListItemID, itemCanvasObject fyne.CanvasObject) {
+			if itemID < len(membershipFilteredMembers) {
+				member := membershipFilteredMembers[itemID]
+				c := itemCanvasObject.(*fyne.Container)
+				nameLabel := c.Objects[0].(*widget.Label) // Assuming first object is name label
+				idLabel := c.Objects[1].(*widget.Label)   // Assuming second object is ID label
+				nameLabel.SetText(member.Name)
+				idLabel.SetText(member.ID)
+			}
+		},
+	)
+
+	membershipResultsList.OnSelected = func(id widget.ListItemID) {
+		if id < len(membershipFilteredMembers) {
+			selectedMember := membershipFilteredMembers[id]
+			membershipDetailLabel.SetText(fmt.Sprintf("Selected Member:\nName: %s\nID: %s", selectedMember.Name, selectedMember.ID))
+		}
+		// Optional: Unselect after a delay or action to allow re-selection
+		// go func() {
+		// 	time.Sleep(200 * time.Millisecond)
+		// 	fyne.CurrentApp().Driver().CanvasForObject(membershipResultsList).Focus(nil) // Try to remove focus
+		// 	membershipResultsList.UnselectAll()
+		// }()
+	}
+	membershipResultsList.Hide() // Initially hide the list
+
+	fzfMemberSearchEntry.OnChanged = func(text string) {
+		filterFzfMembers(text)
+		if text == "" { // If search is cleared, clear details
+			membershipDetailLabel.SetText("Select a member from the list to see details.")
+		}
+	}
+
+	// Use a VBox: Search Entry, then a scrollable list (limited height), then detail label
+	// The list needs to be in a scroll container to manage its height if results are many
+	scrollableResults := container.NewScroll(membershipResultsList)
+	scrollableResults.SetMinSize(fyne.NewSize(300, 200)) // Give the list some default scrollable space
+
+	topContent := container.NewVBox(
+		fzfMemberSearchEntry,
+		scrollableResults, // This will expand if VBox is inside a Border or other expanding layout
+	)
+
+	// Layout: Search and list at top, detail label at bottom.
+	// To make the list take available space but not push detail label off,
+	// we can use a Border layout.
+	return container.NewBorder(topContent, membershipDetailLabel, nil, nil)
+}
+
+// ... (initData, saveData, getters, registerUser, checkoutUser, DeviceButton, etc. remain the same) ...
+// ... (Make sure to copy the rest of the functions from the previously provided full code)
 
 func initData() {
 	ensureLogDir()
@@ -872,7 +972,7 @@ func initData() {
 			}
 		}
 	}
-	loadMembers()
+	loadMembers() // This populates `members` and initializes `membershipFilteredMembers`
 	if activeUserNetworkInstance != nil {
 		activeUserNetworkInstance.pcPositions = make(map[string]fyne.Position)
 		activeUserNetworkInstance.UpdateUsers(activeUsers)
@@ -1189,66 +1289,6 @@ func buildActiveUsersInfoTabView() fyne.CanvasObject {
 	return activeUserNetworkInstance
 }
 
-func filterMembers(searchTextValue string) {
-	searchTextValue = strings.ToLower(strings.TrimSpace(searchTextValue))
-	newDisplayMembers := []Member{}
-	if searchTextValue == "" {
-		newDisplayMembers = make([]Member, len(members))
-		copy(newDisplayMembers, members)
-	} else {
-		for _, member := range members {
-			if strings.Contains(strings.ToLower(member.Name), searchTextValue) || strings.Contains(strings.ToLower(member.ID), searchTextValue) {
-				newDisplayMembers = append(newDisplayMembers, member)
-			}
-		}
-	}
-	displayMembers = newDisplayMembers
-	if memberTable != nil {
-		memberTable.Refresh()
-	}
-}
-
-func buildMembershipView() fyne.CanvasObject {
-	memberSearchEntry = widget.NewEntry()
-	memberSearchEntry.SetPlaceHolder("Search Name/ID...")
-	memberSearchEntry.OnChanged = filterMembers
-
-	memberTable = widget.NewTable(
-		func() (int, int) { return len(displayMembers) + 1, 2 },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
-		func(cellID widget.TableCellID, cellObject fyne.CanvasObject) {
-			label := cellObject.(*widget.Label)
-			if cellID.Row == 0 {
-				label.TextStyle.Bold = true
-				if cellID.Col == 0 {
-					label.SetText("Name")
-				} else {
-					label.SetText("ID")
-				}
-				return
-			}
-			label.TextStyle.Bold = false
-			memberIndex := cellID.Row - 1
-			if memberIndex < len(displayMembers) {
-				member := displayMembers[memberIndex]
-				if cellID.Col == 0 {
-					label.SetText(member.Name)
-				} else {
-					label.SetText(member.ID)
-				}
-			} else {
-				label.SetText("")
-			}
-		})
-	memberTable.SetColumnWidth(0, 240)
-	memberTable.SetColumnWidth(1, 160)
-
-	if displayMembers == nil {
-		filterMembers("")
-	}
-	return container.NewBorder(container.NewPadded(memberSearchEntry), nil, nil, nil, container.NewScroll(memberTable))
-}
-
 func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 	const (
 		dialogWidth             float32 = 460
@@ -1272,34 +1312,34 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 		deviceEntryWidget.SetPlaceHolder("Enter Device ID")
 	}
 
-	var filteredMembers []Member
-	var resultsList *widget.List
+	var filteredMembersForDialog []Member // Use a local slice for this dialog
+	var resultsListDialog *widget.List
 	var dialogReference dialog.Dialog
 
-	resultsList = widget.NewList(
-		func() int { return len(filteredMembers) },
+	resultsListDialog = widget.NewList(
+		func() int { return len(filteredMembersForDialog) },
 		func() fyne.CanvasObject { return widget.NewLabel("") },
 		func(listItemIndex widget.ListItemID, itemCanvasObject fyne.CanvasObject) {
-			if listItemIndex >= 0 && listItemIndex < len(filteredMembers) {
-				itemCanvasObject.(*widget.Label).SetText(fmt.Sprintf("%s (%s)", filteredMembers[listItemIndex].Name, filteredMembers[listItemIndex].ID))
+			if listItemIndex >= 0 && listItemIndex < len(filteredMembersForDialog) {
+				itemCanvasObject.(*widget.Label).SetText(fmt.Sprintf("%s (%s)", filteredMembersForDialog[listItemIndex].Name, filteredMembersForDialog[listItemIndex].ID))
 			}
 		})
 
-	scrollableResults := container.NewScroll(resultsList)
-	scrollableResults.SetMinSize(fyne.NewSize(dialogWidth-40, dialogResultsListHeight-10))
-	scrollableResults.Hide()
+	scrollableResultsDialog := container.NewScroll(resultsListDialog)
+	scrollableResultsDialog.SetMinSize(fyne.NewSize(dialogWidth-40, dialogResultsListHeight-10))
+	scrollableResultsDialog.Hide()
 
-	resultsList.OnSelected = func(selectedListItemID widget.ListItemID) {
-		if selectedListItemID >= 0 && selectedListItemID < len(filteredMembers) {
-			selectedMember := filteredMembers[selectedListItemID]
+	resultsListDialog.OnSelected = func(selectedListItemID widget.ListItemID) {
+		if selectedListItemID >= 0 && selectedListItemID < len(filteredMembersForDialog) {
+			selectedMember := filteredMembersForDialog[selectedListItemID]
 			nameEntry.SetText(selectedMember.Name)
 			idEntry.SetText(selectedMember.ID)
 			searchEntry.SetText("")
-			scrollableResults.Hide()
-			resultsList.UnselectAll()
-			filteredMembers = []Member{}
-			resultsList.Refresh()
-			if dialogReference != nil {
+			scrollableResultsDialog.Hide()
+			resultsListDialog.UnselectAll()
+			filteredMembersForDialog = []Member{}
+			resultsListDialog.Refresh()
+			if dialogReference != nil { // Assuming dialogReference is captured by this closure
 				dialogReference.Resize(fyne.NewSize(dialogWidth, dialogBaseHeight))
 			}
 		}
@@ -1308,24 +1348,24 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 	searchEntry.OnChanged = func(searchTextValue string) {
 		searchTextValue = strings.ToLower(strings.TrimSpace(searchTextValue))
 		if searchTextValue == "" {
-			filteredMembers = []Member{}
+			filteredMembersForDialog = []Member{}
 		} else {
-			newFilteredMembers := []Member{}
-			for _, member := range members {
+			newFiltered := []Member{}
+			for _, member := range members { // Search the global 'members' list
 				if strings.Contains(strings.ToLower(member.Name), searchTextValue) || strings.Contains(strings.ToLower(member.ID), searchTextValue) {
-					newFilteredMembers = append(newFilteredMembers, member)
+					newFiltered = append(newFiltered, member)
 				}
 			}
-			filteredMembers = newFilteredMembers
+			filteredMembersForDialog = newFiltered
 		}
-		resultsList.Refresh()
+		resultsListDialog.Refresh()
 
 		if dialogReference != nil {
-			if len(filteredMembers) > 0 {
-				scrollableResults.Show()
+			if len(filteredMembersForDialog) > 0 {
+				scrollableResultsDialog.Show()
 				dialogReference.Resize(fyne.NewSize(dialogWidth, dialogBaseHeight+dialogResultsListHeight))
 			} else {
-				scrollableResults.Hide()
+				scrollableResultsDialog.Hide()
 				dialogReference.Resize(fyne.NewSize(dialogWidth, dialogBaseHeight))
 			}
 		}
@@ -1377,7 +1417,7 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 		}
 	}
 
-	dialogContent := container.NewVBox(searchEntry, scrollableResults, formWidget)
+	dialogContent := container.NewVBox(searchEntry, scrollableResultsDialog, formWidget)
 
 	dialogReference = dialog.NewCustomConfirm("Check In User", "Check In", "Cancel", dialogContent, func(confirmed bool) {
 		if confirmed {
@@ -1469,7 +1509,7 @@ func main() {
 
 	deviceStatusTabContent := buildDeviceRoomContent()
 	activeUsersTabContent := buildActiveUsersInfoTabView()
-	membershipView := buildMembershipView()
+	membershipView := buildMembershipView() // This will now build the FZF-style view
 	logView := buildLogView()
 
 	resetLayoutButton := widget.NewButton("Reset Network Layout", func() {
@@ -1482,11 +1522,10 @@ func main() {
 
 	checkInButton := widget.NewButtonWithIcon("Check In", theme.ContentAddIcon(), showCheckInDialog)
 	checkOutButton := widget.NewButtonWithIcon("Check Out", theme.ContentRemoveIcon(), showCheckOutDialog)
-	// Removed Refresh Data button
 	toolbar := container.NewHBox(checkInButton, checkOutButton, layout.NewSpacer(), resetLayoutButton)
 
 	totalDevicesLabel := widget.NewLabel("")
-	activeUsersLabel := widget.NewLabel("") // Occupied label removed
+	activeUsersLabel := widget.NewLabel("")
 
 	updateStatusLabels := func() {
 		totalDevicesLabel.SetText(fmt.Sprintf("Total Devices: %d", len(allDevices)))
@@ -1518,20 +1557,28 @@ func main() {
 
 	tabs.SetTabLocation(container.TabLocationTop)
 	tabs.OnSelected = func(selectedTabItem *container.TabItem) {
+		// Hide reset button by default, show only for Active Users tab
+		resetLayoutButton.Hide()
+
 		if selectedTabItem.Text == "Log" && logTabIndex != -1 {
-			resetLayoutButton.Hide()
 			updateCurrentLogEntriesCache()
 			if logTable != nil {
 				logTable.Refresh()
 			}
 			logRefreshPending = false
 		} else if selectedTabItem.Text == "Active Users" && activeUsersTabIndex != -1 {
-			resetLayoutButton.Show()
+			resetLayoutButton.Show() // Show for Active Users tab
 			if activeUserNetworkInstance != nil {
 				activeUserNetworkInstance.UpdateUsers(activeUsers)
 			}
-		} else {
-			resetLayoutButton.Hide()
+		} else if selectedTabItem.Text == "Membership" && membershipTabIndex != -1 {
+			// When membership tab is selected, ensure the list is up-to-date
+			// (e.g., if members were added while on another tab)
+			// and clear any previous search/selection.
+			if fzfMemberSearchEntry != nil {
+				fzfMemberSearchEntry.SetText("") // Clear search text
+			}
+			filterFzfMembers("") // This will clear the list and detail
 		}
 	}
 
@@ -1596,11 +1643,11 @@ func main() {
 						}
 						logRefreshPending = false
 					}
-					if memberSearchEntry != nil {
-						filterMembers(memberSearchEntry.Text)
-					} else {
-						filterMembers("")
-					}
+					// For FZF style, the list updates on text change, but if members list itself changed,
+					// we might need to trigger a re-filter if the membership tab is active.
+					// loadMembers() already reloads `members`. The OnSelected handler for membership tab
+					// already clears the search, which triggers a re-filter with empty text.
+					// If the tab is not selected, the change will be picked up when it is selected.
 
 					if tabs != nil {
 						tabs.Refresh()
