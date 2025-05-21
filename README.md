@@ -11,7 +11,7 @@ A desktop application for managing gaming lounge operations.
 
 Go to the [Releases](https://github.com/odesaur/lounge/releases) page
 
-### Option 2: Compile from Source
+### Option 2: Compile from Source (Linux/MacOS)
 
 #### Build Steps
 
