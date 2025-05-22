@@ -71,19 +71,16 @@ type LogEntry struct {
 }
 
 var (
-	allDevices  []Device
-	activeUsers []User
-	members     []Member
-	// displayMembers is now specific to the fzf-like search on membership tab
+	allDevices                []Device
+	activeUsers               []User
+	members                   []Member
 	membershipFilteredMembers []Member
 	mainWindow                fyne.Window
-	// memberTable is removed as we are changing the UI
-	logTable          *widget.Table
-	refreshTrigger    = make(chan bool, 1)
-	logRefreshPending = false
-	logFileMutex      sync.Mutex
-	currentLogEntries []LogEntry
-	// memberSearchEntry is still used, but in a different context for fzf-style
+	logTable                  *widget.Table
+	refreshTrigger            = make(chan bool, 1)
+	logRefreshPending         = false
+	logFileMutex              sync.Mutex
+	currentLogEntries         []LogEntry
 	fzfMemberSearchEntry      *widget.Entry
 	tabs                      *container.AppTabs
 	deviceStatusTabIndex      int = -1
@@ -92,11 +89,10 @@ var (
 	logTabIndex               int = -1
 	deviceHoverDetailLabel    *widget.Label
 	activeUserNetworkInstance *ActiveUserNetworkWidget
-	membershipResultsList     *widget.List  // For the fzf-style list
-	membershipDetailLabel     *widget.Label // To show details of selected member
+	membershipResultsList     *widget.List
+	membershipDetailLabel     *widget.Label
 )
 
-// ... (classicTheme struct and its methods remain the same) ...
 type classicTheme struct{ fyne.Theme }
 
 func newClassicTheme() fyne.Theme { return &classicTheme{Theme: theme.LightTheme()} }
@@ -167,7 +163,6 @@ func (themeInstance *classicTheme) Size(name fyne.ThemeSizeName) float32 {
 	}
 }
 
-// ... (ActiveUserNetworkWidget and its methods remain the same) ...
 type ActiveUserNetworkWidget struct {
 	widget.BaseWidget
 	users            []User
@@ -182,48 +177,48 @@ type ActiveUserNetworkWidget struct {
 }
 
 func NewActiveUserNetworkWidget() *ActiveUserNetworkWidget {
-	w := &ActiveUserNetworkWidget{
+	widget := &ActiveUserNetworkWidget{
 		users:       make([]User, 0),
 		pcPositions: make(map[string]fyne.Position),
 		rng:         rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 	busyPCPath := filepath.Join(imgBaseDir, "busy.png")
 	if _, err := os.Stat(busyPCPath); err == nil {
-		w.busyPCImage, _ = fyne.LoadResourceFromPath(busyPCPath)
+		widget.busyPCImage, _ = fyne.LoadResourceFromPath(busyPCPath)
 	} else {
 		fmt.Printf("Warning: busy.png not found at %s. Using fallback.\n", busyPCPath)
-		w.busyPCImage = theme.ComputerIcon()
+		widget.busyPCImage = theme.ComputerIcon()
 	}
 
 	consoleBusyPath := filepath.Join(imgBaseDir, "console_busy.png")
 	if _, err := os.Stat(consoleBusyPath); err == nil {
-		w.consoleBusyImage, _ = fyne.LoadResourceFromPath(consoleBusyPath)
+		widget.consoleBusyImage, _ = fyne.LoadResourceFromPath(consoleBusyPath)
 	} else {
 		fmt.Printf("Warning: console_busy.png not found at %s. Using busyPCImage as fallback for consoles.\n", consoleBusyPath)
-		w.consoleBusyImage = w.busyPCImage
+		widget.consoleBusyImage = widget.busyPCImage
 	}
 
-	w.ExtendBaseWidget(w)
-	return w
+	widget.ExtendBaseWidget(widget)
+	return widget
 }
 
-func (w *ActiveUserNetworkWidget) UpdateUsers(users []User) {
+func (widget *ActiveUserNetworkWidget) UpdateUsers(users []User) {
 	newUsersMap := make(map[string]User)
-	for _, u := range users {
-		newUsersMap[u.ID] = u
+	for _, user := range users {
+		newUsersMap[user.ID] = user
 	}
 
 	existingUserIDsInWidget := make(map[string]bool)
-	for _, u := range w.users {
-		existingUserIDsInWidget[u.ID] = true
+	for _, user := range widget.users {
+		existingUserIDsInWidget[user.ID] = true
 	}
 
 	usersActuallyChanged := false
-	if len(users) != len(w.users) {
+	if len(users) != len(widget.users) {
 		usersActuallyChanged = true
 	} else {
-		for _, u := range users {
-			if _, exists := existingUserIDsInWidget[u.ID]; !exists {
+		for _, user := range users {
+			if _, exists := existingUserIDsInWidget[user.ID]; !exists {
 				usersActuallyChanged = true
 				break
 			}
@@ -238,44 +233,44 @@ func (w *ActiveUserNetworkWidget) UpdateUsers(users []User) {
 		}
 	}
 
-	for userID := range w.pcPositions {
+	for userID := range widget.pcPositions {
 		if _, exists := newUsersMap[userID]; !exists {
-			delete(w.pcPositions, userID)
+			delete(widget.pcPositions, userID)
 			usersActuallyChanged = true
 		}
 	}
 
-	w.users = make([]User, len(users))
-	copy(w.users, users)
+	widget.users = make([]User, len(users))
+	copy(widget.users, users)
 
 	newUsersAdded := false
-	for _, user := range w.users {
-		if _, exists := w.pcPositions[user.ID]; !exists {
+	for _, user := range widget.users {
+		if _, exists := widget.pcPositions[user.ID]; !exists {
 			newUsersAdded = true
 			break
 		}
 	}
 
-	if usersActuallyChanged || newUsersAdded || (len(w.users) > 0 && len(w.pcPositions) == 0) {
-		w.calculatePCPositions()
+	if usersActuallyChanged || newUsersAdded || (len(widget.users) > 0 && len(widget.pcPositions) == 0) {
+		widget.calculatePCPositions()
 	}
-	w.Refresh()
+	widget.Refresh()
 }
 
-func (w *ActiveUserNetworkWidget) calculatePCPositions() {
-	if w.containerSize.IsZero() {
+func (widget *ActiveUserNetworkWidget) calculatePCPositions() {
+	if widget.containerSize.IsZero() {
 		return
 	}
-	if len(w.users) == 0 {
-		w.pcPositions = make(map[string]fyne.Position)
+	if len(widget.users) == 0 {
+		widget.pcPositions = make(map[string]fyne.Position)
 		return
 	}
 
-	center := fyne.NewPos(w.containerSize.Width/2, w.containerSize.Height/2)
+	center := fyne.NewPos(widget.containerSize.Width/2, widget.containerSize.Height/2)
 
 	usersToPlace := []User{}
-	for _, user := range w.users {
-		if _, exists := w.pcPositions[user.ID]; !exists {
+	for _, user := range widget.users {
+		if _, exists := widget.pcPositions[user.ID]; !exists {
 			usersToPlace = append(usersToPlace, user)
 		}
 	}
@@ -284,26 +279,26 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 		return
 	}
 
-	if len(w.users) == 1 && len(usersToPlace) == 1 {
-		w.pcPositions[usersToPlace[0].ID] = center
+	if len(widget.users) == 1 && len(usersToPlace) == 1 {
+		widget.pcPositions[usersToPlace[0].ID] = center
 		return
 	}
 
-	if len(w.users) > 0 {
-		firstUserID := w.users[0].ID
+	if len(widget.users) > 0 {
+		firstUserID := widget.users[0].ID
 		needsPlacing := false
-		for _, u := range usersToPlace {
-			if u.ID == firstUserID {
+		for _, user := range usersToPlace {
+			if user.ID == firstUserID {
 				needsPlacing = true
 				break
 			}
 		}
-		if _, alreadyHasPos := w.pcPositions[firstUserID]; !alreadyHasPos && needsPlacing {
-			w.pcPositions[firstUserID] = center
+		if _, alreadyHasPos := widget.pcPositions[firstUserID]; !alreadyHasPos && needsPlacing {
+			widget.pcPositions[firstUserID] = center
 			tempUsersToPlace := []User{}
-			for _, u := range usersToPlace {
-				if u.ID != firstUserID {
-					tempUsersToPlace = append(tempUsersToPlace, u)
+			for _, user := range usersToPlace {
+				if user.ID != firstUserID {
+					tempUsersToPlace = append(tempUsersToPlace, user)
 				}
 			}
 			usersToPlace = tempUsersToPlace
@@ -314,21 +309,21 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 	}
 
 	currentRadius := initialRingRadius
-	if len(w.pcPositions) > 1 {
-		maxR := float32(0.0)
-		for _, pos := range w.pcPositions {
+	if len(widget.pcPositions) > 1 {
+		maxRadius := float32(0.0)
+		for _, pos := range widget.pcPositions {
 			if pos.IsZero() {
 				continue
 			}
-			distX := pos.X - center.X
-			distY := pos.Y - center.Y
-			r := float32(math.Sqrt(float64(distX*distX + distY*distY)))
-			if r > maxR {
-				maxR = r
+			distanceX := pos.X - center.X
+			distanceY := pos.Y - center.Y
+			radius := float32(math.Sqrt(float64(distanceX*distanceX + distanceY*distanceY)))
+			if radius > maxRadius {
+				maxRadius = radius
 			}
 		}
-		if maxR > 0 && maxR+ringStep > currentRadius {
-			currentRadius = maxR + ringStep
+		if maxRadius > 0 && maxRadius+ringStep > currentRadius {
+			currentRadius = maxRadius + ringStep
 		}
 	}
 
@@ -337,7 +332,7 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 	if currentRingCapacity == 0 {
 		currentRingCapacity = 1
 	}
-	initialAngleOffset := w.rng.Float64() * (math.Pi / float64(currentRingCapacity))
+	initialAngleOffset := widget.rng.Float64() * (math.Pi / float64(currentRingCapacity))
 
 	tempNewPositions := make(map[string]fyne.Position)
 
@@ -350,44 +345,44 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 			if currentRingCapacity == 0 {
 				currentRingCapacity = 1
 			}
-			initialAngleOffset = w.rng.Float64() * (math.Pi / float64(currentRingCapacity))
+			initialAngleOffset = widget.rng.Float64() * (math.Pi / float64(currentRingCapacity))
 		}
 
 		angle := initialAngleOffset + (2*math.Pi/float64(currentRingCapacity))*float64(nodesPlacedOnCurrentRing)
-		posX := center.X + currentRadius*float32(math.Cos(angle))
-		posY := center.Y + currentRadius*float32(math.Sin(angle))
+		positionX := center.X + currentRadius*float32(math.Cos(angle))
+		positionY := center.Y + currentRadius*float32(math.Sin(angle))
 
 		minIconCenterX := canvasPadding + pcImageSize/2
-		if posX-pcImageSize/2-8-infoBoxWidth < canvasPadding {
+		if positionX-pcImageSize/2-8-infoBoxWidth < canvasPadding {
 			minIconCenterX = canvasPadding + infoBoxWidth + 8 + pcImageSize/2
 		}
-		maxIconCenterX := w.containerSize.Width - canvasPadding - pcImageSize/2
-		if posX+pcImageSize/2+8+infoBoxWidth > w.containerSize.Width-canvasPadding {
-			maxIconCenterX = w.containerSize.Width - canvasPadding - infoBoxWidth - 8 - pcImageSize/2
+		maxIconCenterX := widget.containerSize.Width - canvasPadding - pcImageSize/2
+		if positionX+pcImageSize/2+8+infoBoxWidth > widget.containerSize.Width-canvasPadding {
+			maxIconCenterX = widget.containerSize.Width - canvasPadding - infoBoxWidth - 8 - pcImageSize/2
 		}
-		posX = float32(math.Max(float64(minIconCenterX), math.Min(float64(posX), float64(maxIconCenterX))))
+		positionX = float32(math.Max(float64(minIconCenterX), math.Min(float64(positionX), float64(maxIconCenterX))))
 
 		minIconCenterY := canvasPadding + infoBoxHeight/2
-		maxIconCenterY := w.containerSize.Height - canvasPadding - infoBoxHeight/2
-		posY = float32(math.Max(float64(minIconCenterY), math.Min(float64(posY), float64(maxIconCenterY))))
+		maxIconCenterY := widget.containerSize.Height - canvasPadding - infoBoxHeight/2
+		positionY = float32(math.Max(float64(minIconCenterY), math.Min(float64(positionY), float64(maxIconCenterY))))
 
-		finalPos := fyne.NewPos(posX, posY)
+		finalPosition := fyne.NewPos(positionX, positionY)
 
 		attempts := 0
 		maxAttemptsToAdjust := 10
 		for attempts < maxAttemptsToAdjust {
 			isOverlapping := false
-			for _, existingPos := range w.pcPositions {
-				dist := math.Sqrt(math.Pow(float64(existingPos.X-finalPos.X), 2) + math.Pow(float64(existingPos.Y-finalPos.Y), 2))
-				if dist < float64(nodeVisualWidth*0.70) {
+			for _, existingPosition := range widget.pcPositions {
+				distance := math.Sqrt(math.Pow(float64(existingPosition.X-finalPosition.X), 2) + math.Pow(float64(existingPosition.Y-finalPosition.Y), 2))
+				if distance < float64(nodeVisualWidth*0.70) {
 					isOverlapping = true
 					break
 				}
 			}
 			if !isOverlapping {
-				for _, newlyPlacedPos := range tempNewPositions {
-					dist := math.Sqrt(math.Pow(float64(newlyPlacedPos.X-finalPos.X), 2) + math.Pow(float64(newlyPlacedPos.Y-finalPos.Y), 2))
-					if dist < float64(nodeVisualWidth*0.70) {
+				for _, newlyPlacedPosition := range tempNewPositions {
+					distance := math.Sqrt(math.Pow(float64(newlyPlacedPosition.X-finalPosition.X), 2) + math.Pow(float64(newlyPlacedPosition.Y-finalPosition.Y), 2))
+					if distance < float64(nodeVisualWidth*0.70) {
 						isOverlapping = true
 						break
 					}
@@ -403,57 +398,57 @@ func (w *ActiveUserNetworkWidget) calculatePCPositions() {
 			} else {
 				currentRadius += ringStep * 0.05
 			}
-			posX = center.X + currentRadius*float32(math.Cos(angle))
-			posY = center.Y + currentRadius*float32(math.Sin(angle))
+			positionX = center.X + currentRadius*float32(math.Cos(angle))
+			positionY = center.Y + currentRadius*float32(math.Sin(angle))
 
-			posX = float32(math.Max(float64(minIconCenterX), math.Min(float64(posX), float64(maxIconCenterX))))
-			posY = float32(math.Max(float64(minIconCenterY), math.Min(float64(posY), float64(maxIconCenterY))))
-			finalPos = fyne.NewPos(posX, posY)
+			positionX = float32(math.Max(float64(minIconCenterX), math.Min(float64(positionX), float64(maxIconCenterX))))
+			positionY = float32(math.Max(float64(minIconCenterY), math.Min(float64(positionY), float64(maxIconCenterY))))
+			finalPosition = fyne.NewPos(positionX, positionY)
 			attempts++
 		}
 
-		w.pcPositions[user.ID] = finalPos
-		tempNewPositions[user.ID] = finalPos
+		widget.pcPositions[user.ID] = finalPosition
+		tempNewPositions[user.ID] = finalPosition
 		nodesPlacedOnCurrentRing++
 	}
 }
 
-func (w *ActiveUserNetworkWidget) Dragged(event *fyne.DragEvent) {
-	if !w.isDragging {
-		for _, user := range w.users {
-			pcPos, ok := w.pcPositions[user.ID]
+func (widget *ActiveUserNetworkWidget) Dragged(event *fyne.DragEvent) {
+	if !widget.isDragging {
+		for _, user := range widget.users {
+			pcPosition, ok := widget.pcPositions[user.ID]
 			if !ok {
 				continue
 			}
-			iconTopLeftX := pcPos.X - pcImageSize/2
-			iconTopLeftY := pcPos.Y - pcImageSize/2
+			iconTopLeftX := pcPosition.X - pcImageSize/2
+			iconTopLeftY := pcPosition.Y - pcImageSize/2
 
 			if event.Position.X >= iconTopLeftX && event.Position.X <= iconTopLeftX+pcImageSize &&
 				event.Position.Y >= iconTopLeftY && event.Position.Y <= iconTopLeftY+pcImageSize {
 
-				w.isDragging = true
-				w.draggingUserID = user.ID
-				w.dragOffset = fyne.NewPos(event.Position.X-pcPos.X, event.Position.Y-pcPos.Y)
+				widget.isDragging = true
+				widget.draggingUserID = user.ID
+				widget.dragOffset = fyne.NewPos(event.Position.X-pcPosition.X, event.Position.Y-pcPosition.Y)
 				break
 			}
 		}
 	}
 
-	if w.isDragging && w.draggingUserID != "" {
-		newPcPosX := event.Position.X - w.dragOffset.X
-		newPcPosY := event.Position.Y - w.dragOffset.Y
+	if widget.isDragging && widget.draggingUserID != "" {
+		newPcPositionX := event.Position.X - widget.dragOffset.X
+		newPcPositionY := event.Position.Y - widget.dragOffset.Y
 
-		newPcPosX = float32(math.Max(float64(canvasPadding+pcImageSize/2), math.Min(float64(newPcPosX), float64(w.containerSize.Width-canvasPadding-pcImageSize/2))))
-		newPcPosY = float32(math.Max(float64(canvasPadding+pcImageSize/2), math.Min(float64(newPcPosY), float64(w.containerSize.Height-canvasPadding-pcImageSize/2))))
+		newPcPositionX = float32(math.Max(float64(canvasPadding+pcImageSize/2), math.Min(float64(newPcPositionX), float64(widget.containerSize.Width-canvasPadding-pcImageSize/2))))
+		newPcPositionY = float32(math.Max(float64(canvasPadding+pcImageSize/2), math.Min(float64(newPcPositionY), float64(widget.containerSize.Height-canvasPadding-pcImageSize/2))))
 
-		w.pcPositions[w.draggingUserID] = fyne.NewPos(newPcPosX, newPcPosY)
-		w.Refresh()
+		widget.pcPositions[widget.draggingUserID] = fyne.NewPos(newPcPositionX, newPcPositionY)
+		widget.Refresh()
 	}
 }
 
-func (w *ActiveUserNetworkWidget) DragEnd() {
-	w.isDragging = false
-	w.draggingUserID = ""
+func (widget *ActiveUserNetworkWidget) DragEnd() {
+	widget.isDragging = false
+	widget.draggingUserID = ""
 }
 
 type activeUserNetworkRenderer struct {
@@ -461,106 +456,106 @@ type activeUserNetworkRenderer struct {
 	objects []fyne.CanvasObject
 }
 
-func (r *activeUserNetworkRenderer) Layout(size fyne.Size) {
-	if r.widget.containerSize != size {
-		oldSize := r.widget.containerSize
-		r.widget.containerSize = size
+func (renderer *activeUserNetworkRenderer) Layout(size fyne.Size) {
+	if renderer.widget.containerSize != size {
+		oldSize := renderer.widget.containerSize
+		renderer.widget.containerSize = size
 		if oldSize.IsZero() || math.Abs(float64(oldSize.Width-size.Width)) > 50 || math.Abs(float64(oldSize.Height-size.Height)) > 50 {
-			r.widget.calculatePCPositions()
+			renderer.widget.calculatePCPositions()
 		}
 	}
-	r.widget.Refresh()
+	renderer.widget.Refresh()
 }
 
-func (r *activeUserNetworkRenderer) MinSize() fyne.Size {
+func (renderer *activeUserNetworkRenderer) MinSize() fyne.Size {
 	return fyne.NewSize(600, 400)
 }
 
-func (r *activeUserNetworkRenderer) Refresh() {
-	r.objects = []fyne.CanvasObject{}
+func (renderer *activeUserNetworkRenderer) Refresh() {
+	renderer.objects = []fyne.CanvasObject{}
 
-	if r.widget.busyPCImage == nil {
-		r.objects = append(r.objects, widget.NewLabel("Error: busy.png resource not loaded"))
-		canvas.Refresh(r.widget)
+	if renderer.widget.busyPCImage == nil {
+		renderer.objects = append(renderer.objects, widget.NewLabel("Error: busy.png resource not loaded"))
+		canvas.Refresh(renderer.widget)
 		return
 	}
 
-	if len(r.widget.users) == 0 {
+	if len(renderer.widget.users) == 0 {
 		noUsersLabel := widget.NewLabel("No active users to display.")
-		if !r.widget.containerSize.IsZero() {
+		if !renderer.widget.containerSize.IsZero() {
 			labelSize := noUsersLabel.MinSize()
 			noUsersLabel.Move(fyne.NewPos(
-				(r.widget.containerSize.Width-labelSize.Width)/2,
-				(r.widget.containerSize.Height-labelSize.Height)/2,
+				(renderer.widget.containerSize.Width-labelSize.Width)/2,
+				(renderer.widget.containerSize.Height-labelSize.Height)/2,
 			))
 		}
-		r.objects = append(r.objects, noUsersLabel)
-		canvas.Refresh(r.widget)
+		renderer.objects = append(renderer.objects, noUsersLabel)
+		canvas.Refresh(renderer.widget)
 		return
 	}
 
-	var centerUserPos fyne.Position
+	var centerUserPosition fyne.Position
 	centerUserExists := false
-	if len(r.widget.users) > 0 {
-		firstUserID := r.widget.users[0].ID
-		if pos, ok := r.widget.pcPositions[firstUserID]; ok {
-			centerUserPos = pos
+	if len(renderer.widget.users) > 0 {
+		firstUserID := renderer.widget.users[0].ID
+		if position, ok := renderer.widget.pcPositions[firstUserID]; ok {
+			centerUserPosition = position
 			centerUserExists = true
 		}
 	}
 
-	for i, user := range r.widget.users {
-		if i == 0 && centerUserExists {
+	for index, user := range renderer.widget.users {
+		if index == 0 && centerUserExists {
 			continue
 		}
-		pcPos, ok := r.widget.pcPositions[user.ID]
+		pcPosition, ok := renderer.widget.pcPositions[user.ID]
 		if !ok {
 			continue
 		}
 		if centerUserExists {
 			line := canvas.NewLine(theme.PrimaryColor())
-			line.Position1 = pcPos
-			line.Position2 = centerUserPos
+			line.Position1 = pcPosition
+			line.Position2 = centerUserPosition
 			line.StrokeWidth = 1.5
-			r.objects = append(r.objects, line)
+			renderer.objects = append(renderer.objects, line)
 		}
 	}
 
-	for _, user := range r.widget.users {
-		pcPos, ok := r.widget.pcPositions[user.ID]
+	for _, user := range renderer.widget.users {
+		pcPosition, ok := renderer.widget.pcPositions[user.ID]
 		if !ok {
 			continue
 		}
 
-		var currentBusyImage fyne.Resource = r.widget.busyPCImage
+		var currentBusyImage fyne.Resource = renderer.widget.busyPCImage
 		device := getDeviceByID(user.PCID)
 		if device != nil && device.Type == "Console" {
-			if r.widget.consoleBusyImage != nil {
-				currentBusyImage = r.widget.consoleBusyImage
+			if renderer.widget.consoleBusyImage != nil {
+				currentBusyImage = renderer.widget.consoleBusyImage
 			}
 		}
 
 		pcIcon := canvas.NewImageFromResource(currentBusyImage)
 		pcIcon.Resize(fyne.NewSize(pcImageSize, pcImageSize))
-		pcIcon.Move(fyne.NewPos(pcPos.X-pcImageSize/2, pcPos.Y-pcImageSize/2))
-		r.objects = append(r.objects, pcIcon)
+		pcIcon.Move(fyne.NewPos(pcPosition.X-pcImageSize/2, pcPosition.Y-pcImageSize/2))
+		renderer.objects = append(renderer.objects, pcIcon)
 
-		pcNumText := canvas.NewText(strconv.Itoa(user.PCID), color.White)
-		pcNumText.TextSize = 12
-		pcNumText.Alignment = fyne.TextAlignCenter
-		pcNumText.TextStyle.Bold = true
-		pcNumText.Move(fyne.NewPos(pcPos.X-pcNumText.MinSize().Width/2, pcPos.Y-pcNumText.MinSize().Height/2))
-		r.objects = append(r.objects, pcNumText)
+		pcNumberText := canvas.NewText(strconv.Itoa(user.PCID), color.White)
+		pcNumberText.TextSize = 12
+		pcNumberText.Alignment = fyne.TextAlignCenter
+		pcNumberText.TextStyle.Bold = true
+		pcNumberText.Move(fyne.NewPos(pcPosition.X-pcNumberText.MinSize().Width/2, pcPosition.Y-pcNumberText.MinSize().Height/2))
+		renderer.objects = append(renderer.objects, pcNumberText)
 
 		infoBoxRect := canvas.NewRectangle(theme.BackgroundColor())
 		infoBoxRect.SetMinSize(fyne.NewSize(infoBoxWidth, infoBoxHeight))
 
-		infoBoxX := pcPos.X + pcImageSize/2 + 8
-		infoBoxY := pcPos.Y - infoBoxHeight/2
+		infoBoxX := pcPosition.X + pcImageSize/2 + 8
+		infoBoxY := pcPosition.Y - infoBoxHeight/2
 
-		if !r.widget.containerSize.IsZero() {
-			if infoBoxX+infoBoxWidth > r.widget.containerSize.Width-canvasPadding {
-				infoBoxX = pcPos.X - pcImageSize/2 - infoBoxWidth - 8
+		if !renderer.widget.containerSize.IsZero() {
+			if infoBoxX+infoBoxWidth > renderer.widget.containerSize.Width-canvasPadding {
+				infoBoxX = pcPosition.X - pcImageSize/2 - infoBoxWidth - 8
 			}
 			if infoBoxX < canvasPadding {
 				infoBoxX = canvasPadding
@@ -568,15 +563,15 @@ func (r *activeUserNetworkRenderer) Refresh() {
 			if infoBoxY < canvasPadding {
 				infoBoxY = canvasPadding
 			}
-			if infoBoxY+infoBoxHeight > r.widget.containerSize.Height-canvasPadding {
-				infoBoxY = r.widget.containerSize.Height - infoBoxHeight - canvasPadding
+			if infoBoxY+infoBoxHeight > renderer.widget.containerSize.Height-canvasPadding {
+				infoBoxY = renderer.widget.containerSize.Height - infoBoxHeight - canvasPadding
 			}
 		}
 
 		infoBoxRect.Move(fyne.NewPos(infoBoxX, infoBoxY))
 		infoBoxRect.StrokeColor = theme.PrimaryColor()
 		infoBoxRect.StrokeWidth = 1
-		r.objects = append(r.objects, infoBoxRect)
+		renderer.objects = append(renderer.objects, infoBoxRect)
 
 		line1 := fmt.Sprintf("PC: %d", user.PCID)
 		line2 := fmt.Sprintf("%s", user.Name)
@@ -593,36 +588,34 @@ func (r *activeUserNetworkRenderer) Refresh() {
 		}
 
 		currentY := infoBoxY + 3
-		for textIdx, txt := range texts {
-			txt.TextSize = 10
-			if textIdx == 1 {
-				txt.TextSize = 11
-				txt.TextStyle.Bold = true
+		for textIndex, text := range texts {
+			text.TextSize = 10
+			if textIndex == 1 {
+				text.TextSize = 11
+				text.TextStyle.Bold = true
 			}
-			txt.Move(fyne.NewPos(infoBoxX+5, currentY))
-			r.objects = append(r.objects, txt)
-			currentY += txt.MinSize().Height + 1
+			text.Move(fyne.NewPos(infoBoxX+5, currentY))
+			renderer.objects = append(renderer.objects, text)
+			currentY += text.MinSize().Height + 1
 		}
 	}
-	canvas.Refresh(r.widget)
+	canvas.Refresh(renderer.widget)
 }
 
-func (r *activeUserNetworkRenderer) Objects() []fyne.CanvasObject {
-	return r.objects
+func (renderer *activeUserNetworkRenderer) Objects() []fyne.CanvasObject {
+	return renderer.objects
 }
-func (r *activeUserNetworkRenderer) Destroy() {}
+func (renderer *activeUserNetworkRenderer) Destroy() {}
 
-func (w *ActiveUserNetworkWidget) CreateRenderer() fyne.WidgetRenderer {
-	r := &activeUserNetworkRenderer{
-		widget:  w,
+func (widget *ActiveUserNetworkWidget) CreateRenderer() fyne.WidgetRenderer {
+	renderer := &activeUserNetworkRenderer{
+		widget:  widget,
 		objects: []fyne.CanvasObject{},
 	}
-	return r
+	return renderer
 }
 
-// ... (ensureLogDir to getFormattedUsageDuration remain the same) ...
-
-func ensureLogDir() error { return os.MkdirAll(logDir, 0755) }
+func ensureLogDir() error { return os.MkdirAll(logDir, 0o755) }
 
 func getLogFilePath() string {
 	today := time.Now().Format("2006-01-02")
@@ -658,7 +651,7 @@ func writeDailyLogEntries(entries []LogEntry) error {
 	if err != nil {
 		return fmt.Errorf("error marshaling log: %w", err)
 	}
-	return os.WriteFile(filePath, fileData, 0644)
+	return os.WriteFile(filePath, fileData, 0o644)
 }
 
 func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTimeForUpdate *time.Time) {
@@ -708,11 +701,11 @@ func recordLogEvent(isCheckIn bool, user User, deviceID int, originalCheckInTime
 	})
 }
 
-func formatDuration(durationVal time.Duration) string {
-	durationVal = durationVal.Round(time.Second)
-	hours := int(durationVal.Hours())
-	minutes := int(durationVal.Minutes()) % 60
-	seconds := int(durationVal.Seconds()) % 60
+func formatDuration(durationValue time.Duration) string {
+	durationValue = durationValue.Round(time.Second)
+	hours := int(durationValue.Hours())
+	minutes := int(durationValue.Minutes()) % 60
+	seconds := int(durationValue.Seconds()) % 60
 	if hours > 0 {
 		return fmt.Sprintf("%dh%02dm%02ds", hours, minutes, seconds)
 	}
@@ -797,7 +790,6 @@ func loadMembers() {
 			newMemberFile.Close()
 		}
 		members = []Member{}
-		// displayMembers is now membershipFilteredMembers
 		membershipFilteredMembers = []Member{}
 		return
 	}
@@ -810,12 +802,15 @@ func loadMembers() {
 			members = append(members, Member{Name: row[0], ID: row[1]})
 		}
 	}
-	// Initialize with no filter for fzf style
 	membershipFilteredMembers = []Member{}
 }
 
+func getNextMemberID() string {
+	return strconv.Itoa(len(members) + 1)
+}
+
 func appendMember(memberToAppend Member) {
-	memberCsvFile, err := os.OpenFile(memberFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	memberCsvFile, err := os.OpenFile(memberFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		fmt.Println("Error opening member file for append:", err)
 		return
@@ -833,26 +828,24 @@ func appendMember(memberToAppend Member) {
 	}
 
 	members = append(members, memberToAppend)
-	// If fzfMemberSearchEntry is active, re-filter
 	if fzfMemberSearchEntry != nil && membershipResultsList != nil {
 		filterFzfMembers(fzfMemberSearchEntry.Text)
 	}
 }
 
-func memberByID(id string) *Member {
+func memberByID(memberID string) *Member {
 	for memberIndex := range members {
-		if members[memberIndex].ID == id {
+		if members[memberIndex].ID == memberID {
 			return &members[memberIndex]
 		}
 	}
 	return nil
 }
 
-// This function is now specific to the FZF-style membership tab search
 func filterFzfMembers(searchTextValue string) {
 	searchTextValue = strings.ToLower(strings.TrimSpace(searchTextValue))
 	newFilteredMembers := []Member{}
-	if searchTextValue != "" { // Only show results if there's search text
+	if searchTextValue != "" {
 		for _, member := range members {
 			if strings.Contains(strings.ToLower(member.Name), searchTextValue) || strings.Contains(strings.ToLower(member.ID), searchTextValue) {
 				newFilteredMembers = append(newFilteredMembers, member)
@@ -863,9 +856,9 @@ func filterFzfMembers(searchTextValue string) {
 	if membershipResultsList != nil {
 		membershipResultsList.Refresh()
 		if len(membershipFilteredMembers) == 0 && searchTextValue == "" {
-			membershipResultsList.Hide() // Hide if search is empty and no results
+			membershipResultsList.Hide()
 			if membershipDetailLabel != nil {
-				membershipDetailLabel.SetText("") // Clear detail if search is cleared
+				membershipDetailLabel.SetText("")
 			}
 		} else {
 			membershipResultsList.Show()
@@ -877,7 +870,7 @@ func buildMembershipView() fyne.CanvasObject {
 	fzfMemberSearchEntry = widget.NewEntry()
 	fzfMemberSearchEntry.SetPlaceHolder("Search Members (Name/ID)...")
 
-	membershipFilteredMembers = []Member{} // Initialize as empty
+	membershipFilteredMembers = []Member{}
 
 	membershipDetailLabel = widget.NewLabel("Select a member from the list to see details.")
 	membershipDetailLabel.Wrapping = fyne.TextWrapWord
@@ -893,54 +886,40 @@ func buildMembershipView() fyne.CanvasObject {
 		func(itemID widget.ListItemID, itemCanvasObject fyne.CanvasObject) {
 			if itemID < len(membershipFilteredMembers) {
 				member := membershipFilteredMembers[itemID]
-				c := itemCanvasObject.(*fyne.Container)
-				nameLabel := c.Objects[0].(*widget.Label) // Assuming first object is name label
-				idLabel := c.Objects[1].(*widget.Label)   // Assuming second object is ID label
+				containerObject := itemCanvasObject.(*fyne.Container)
+				nameLabel := containerObject.Objects[0].(*widget.Label)
+				idLabel := containerObject.Objects[1].(*widget.Label)
 				nameLabel.SetText(member.Name)
 				idLabel.SetText(member.ID)
 			}
 		},
 	)
 
-	membershipResultsList.OnSelected = func(id widget.ListItemID) {
-		if id < len(membershipFilteredMembers) {
-			selectedMember := membershipFilteredMembers[id]
+	membershipResultsList.OnSelected = func(selectedID widget.ListItemID) {
+		if selectedID < len(membershipFilteredMembers) {
+			selectedMember := membershipFilteredMembers[selectedID]
 			membershipDetailLabel.SetText(fmt.Sprintf("Selected Member:\nName: %s\nID: %s", selectedMember.Name, selectedMember.ID))
 		}
-		// Optional: Unselect after a delay or action to allow re-selection
-		// go func() {
-		// 	time.Sleep(200 * time.Millisecond)
-		// 	fyne.CurrentApp().Driver().CanvasForObject(membershipResultsList).Focus(nil) // Try to remove focus
-		// 	membershipResultsList.UnselectAll()
-		// }()
 	}
-	membershipResultsList.Hide() // Initially hide the list
+	membershipResultsList.Hide()
 
 	fzfMemberSearchEntry.OnChanged = func(text string) {
 		filterFzfMembers(text)
-		if text == "" { // If search is cleared, clear details
+		if text == "" {
 			membershipDetailLabel.SetText("Select a member from the list to see details.")
 		}
 	}
 
-	// Use a VBox: Search Entry, then a scrollable list (limited height), then detail label
-	// The list needs to be in a scroll container to manage its height if results are many
 	scrollableResults := container.NewScroll(membershipResultsList)
-	scrollableResults.SetMinSize(fyne.NewSize(300, 200)) // Give the list some default scrollable space
+	scrollableResults.SetMinSize(fyne.NewSize(300, 200))
 
 	topContent := container.NewVBox(
 		fzfMemberSearchEntry,
-		scrollableResults, // This will expand if VBox is inside a Border or other expanding layout
+		scrollableResults,
 	)
 
-	// Layout: Search and list at top, detail label at bottom.
-	// To make the list take available space but not push detail label off,
-	// we can use a Border layout.
 	return container.NewBorder(topContent, membershipDetailLabel, nil, nil)
 }
-
-// ... (initData, saveData, getters, registerUser, checkoutUser, DeviceButton, etc. remain the same) ...
-// ... (Make sure to copy the rest of the functions from the previously provided full code)
 
 func initData() {
 	ensureLogDir()
@@ -959,10 +938,10 @@ func initData() {
 			if json.NewDecoder(userDataFileHandle).Decode(&activeUsers) == nil {
 				for userIndex := range activeUsers {
 					user := &activeUsers[userIndex]
-					for deviceIdx := range allDevices {
-						if allDevices[deviceIdx].ID == user.PCID {
-							allDevices[deviceIdx].Status = "occupied"
-							allDevices[deviceIdx].UserID = user.ID
+					for deviceIndex := range allDevices {
+						if allDevices[deviceIndex].ID == user.PCID {
+							allDevices[deviceIndex].Status = "occupied"
+							allDevices[deviceIndex].UserID = user.ID
 							break
 						}
 					}
@@ -972,7 +951,7 @@ func initData() {
 			}
 		}
 	}
-	loadMembers() // This populates `members` and initializes `membershipFilteredMembers`
+	loadMembers()
 	if activeUserNetworkInstance != nil {
 		activeUserNetworkInstance.pcPositions = make(map[string]fyne.Position)
 		activeUserNetworkInstance.UpdateUsers(activeUsers)
@@ -992,18 +971,18 @@ func saveData() {
 	}
 }
 
-func getUserByID(id string) *User {
+func getUserByID(userID string) *User {
 	for userIndex := range activeUsers {
-		if activeUsers[userIndex].ID == id {
+		if activeUsers[userIndex].ID == userID {
 			return &activeUsers[userIndex]
 		}
 	}
 	return nil
 }
 
-func getDeviceByID(id int) *Device {
+func getDeviceByID(deviceID int) *Device {
 	for deviceIndex := range allDevices {
-		if allDevices[deviceIndex].ID == id {
+		if allDevices[deviceIndex].ID == deviceID {
 			return &allDevices[deviceIndex]
 		}
 	}
@@ -1019,13 +998,13 @@ func getDeviceByUserID(userID string) *Device {
 	return nil
 }
 
-func registerUser(name, id string, deviceID int) error {
-	if _, err := strconv.Atoi(id); err != nil {
+func registerUser(name, userID string, deviceID int) error {
+	if _, err := strconv.Atoi(userID); err != nil {
 		return fmt.Errorf("user ID must be numeric")
 	}
-	if getUserByID(id) != nil {
-		existingUser := getUserByID(id)
-		return fmt.Errorf("user ID %s (%s) already checked in on Device %d", id, existingUser.Name, existingUser.PCID)
+	if getUserByID(userID) != nil {
+		existingUser := getUserByID(userID)
+		return fmt.Errorf("user ID %s (%s) already checked in on Device %d", userID, existingUser.Name, existingUser.PCID)
 	}
 	device := getDeviceByID(deviceID)
 	if device == nil {
@@ -1036,13 +1015,13 @@ func registerUser(name, id string, deviceID int) error {
 	}
 
 	device.Status = "occupied"
-	device.UserID = id
+	device.UserID = userID
 
-	newUser := User{ID: id, Name: name, CheckInTime: time.Now(), PCID: deviceID}
+	newUser := User{ID: userID, Name: name, CheckInTime: time.Now(), PCID: deviceID}
 	activeUsers = append(activeUsers, newUser)
 
-	if memberByID(id) == nil {
-		appendMember(Member{Name: name, ID: id})
+	if memberByID(userID) == nil {
+		appendMember(Member{Name: name, ID: userID})
 	}
 	saveData()
 	go recordLogEvent(true, newUser, deviceID, nil)
@@ -1189,14 +1168,14 @@ func (button *DeviceButton) CreateRenderer() fyne.WidgetRenderer {
 	label.Alignment = fyne.TextAlignCenter
 
 	content := container.NewVBox(image, label)
-	renderer := &deviceRenderer{button: button, img: image, label: label, objects: []fyne.CanvasObject{content}}
+	renderer := &deviceRenderer{button: button, image: image, label: label, objects: []fyne.CanvasObject{content}}
 	renderer.Refresh()
 	return renderer
 }
 
 type deviceRenderer struct {
 	button  *DeviceButton
-	img     *canvas.Image
+	image   *canvas.Image
 	label   *widget.Label
 	objects []fyne.CanvasObject
 }
@@ -1226,8 +1205,8 @@ func (renderer *deviceRenderer) Refresh() {
 	if _, err := os.Stat(imagePath); os.IsNotExist(err) {
 		fmt.Printf("Warning: Image %s not found during refresh\n", imagePath)
 	}
-	renderer.img.File = imagePath
-	renderer.img.Refresh()
+	renderer.image.File = imagePath
+	renderer.image.Refresh()
 
 	labelText := strconv.Itoa(renderer.button.device.ID)
 	if renderer.button.device.ID == 17 {
@@ -1305,6 +1284,12 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 	nameEntry.SetPlaceHolder("Full Name")
 	idEntry.SetPlaceHolder("9 Digits Student ID")
 
+	noIDButton := widget.NewButton("No ID?", func() {
+		nextID := getNextMemberID()
+		idEntry.SetText(nextID)
+	})
+	noIDButton.Resize(fyne.NewSize(55, 25))
+
 	if deviceIDIsFixed {
 		deviceEntryWidget.SetText(strconv.Itoa(deviceID))
 		deviceEntryWidget.Disable()
@@ -1312,7 +1297,7 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 		deviceEntryWidget.SetPlaceHolder("Enter Device ID")
 	}
 
-	var filteredMembersForDialog []Member // Use a local slice for this dialog
+	var filteredMembersForDialog []Member
 	var resultsListDialog *widget.List
 	var dialogReference dialog.Dialog
 
@@ -1339,7 +1324,7 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 			resultsListDialog.UnselectAll()
 			filteredMembersForDialog = []Member{}
 			resultsListDialog.Refresh()
-			if dialogReference != nil { // Assuming dialogReference is captured by this closure
+			if dialogReference != nil {
 				dialogReference.Resize(fyne.NewSize(dialogWidth, dialogBaseHeight))
 			}
 		}
@@ -1351,7 +1336,7 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 			filteredMembersForDialog = []Member{}
 		} else {
 			newFiltered := []Member{}
-			for _, member := range members { // Search the global 'members' list
+			for _, member := range members {
 				if strings.Contains(strings.ToLower(member.Name), searchTextValue) || strings.Contains(strings.ToLower(member.ID), searchTextValue) {
 					newFiltered = append(newFiltered, member)
 				}
@@ -1371,9 +1356,12 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 		}
 	}
 
+	// Create user ID row with button on the same line
+	userIDRow := container.NewBorder(nil, nil, nil, noIDButton, idEntry)
+
 	formWidget := widget.NewForm(
 		widget.NewFormItem("Name:", nameEntry),
-		widget.NewFormItem("User ID:", idEntry),
+		widget.NewFormItem("User ID:", userIDRow),
 		widget.NewFormItem("Device ID:", deviceEntryWidget),
 	)
 
@@ -1440,10 +1428,10 @@ func showCheckOutDialog() {
 	activeUserIDs := make([]string, len(activeUsers))
 
 	for index, user := range activeUsers {
-		maxNameLen := 25
+		maxNameLength := 25
 		displayName := user.Name
-		if len(displayName) > maxNameLen {
-			displayName = displayName[:maxNameLen-3] + "..."
+		if len(displayName) > maxNameLength {
+			displayName = displayName[:maxNameLength-3] + "..."
 		}
 		activeUserDisplayStrings[index] = fmt.Sprintf("%s (ID: %s, PC: %d)", displayName, user.ID, user.PCID)
 		activeUserIDs[index] = user.ID
@@ -1456,7 +1444,7 @@ func showCheckOutDialog() {
 		{Text: "User:", Widget: idSelector},
 	}
 
-	d := dialog.NewForm("Check Out User", "Check Out", "Cancel", formItems, func(confirmed bool) {
+	dialogInstance := dialog.NewForm("Check Out User", "Check Out", "Cancel", formItems, func(confirmed bool) {
 		if !confirmed {
 			return
 		}
@@ -1486,13 +1474,13 @@ func showCheckOutDialog() {
 		}
 	}, mainWindow)
 
-	d.Resize(fyne.NewSize(450, d.MinSize().Height))
-	d.Show()
+	dialogInstance.Resize(fyne.NewSize(450, dialogInstance.MinSize().Height))
+	dialogInstance.Show()
 }
 
 func main() {
 	initData()
-	if err := os.MkdirAll(imgBaseDir, 0755); err != nil {
+	if err := os.MkdirAll(imgBaseDir, 0o755); err != nil {
 		fmt.Printf("Warning: Unable to create image directory '%s': %v. Images might not load.\n", imgBaseDir, err)
 	}
 
@@ -1509,7 +1497,7 @@ func main() {
 
 	deviceStatusTabContent := buildDeviceRoomContent()
 	activeUsersTabContent := buildActiveUsersInfoTabView()
-	membershipView := buildMembershipView() // This will now build the FZF-style view
+	membershipView := buildMembershipView()
 	logView := buildLogView()
 
 	resetLayoutButton := widget.NewButton("Reset Network Layout", func() {
@@ -1557,7 +1545,6 @@ func main() {
 
 	tabs.SetTabLocation(container.TabLocationTop)
 	tabs.OnSelected = func(selectedTabItem *container.TabItem) {
-		// Hide reset button by default, show only for Active Users tab
 		resetLayoutButton.Hide()
 
 		if selectedTabItem.Text == "Log" && logTabIndex != -1 {
@@ -1567,18 +1554,15 @@ func main() {
 			}
 			logRefreshPending = false
 		} else if selectedTabItem.Text == "Active Users" && activeUsersTabIndex != -1 {
-			resetLayoutButton.Show() // Show for Active Users tab
+			resetLayoutButton.Show()
 			if activeUserNetworkInstance != nil {
 				activeUserNetworkInstance.UpdateUsers(activeUsers)
 			}
 		} else if selectedTabItem.Text == "Membership" && membershipTabIndex != -1 {
-			// When membership tab is selected, ensure the list is up-to-date
-			// (e.g., if members were added while on another tab)
-			// and clear any previous search/selection.
 			if fzfMemberSearchEntry != nil {
-				fzfMemberSearchEntry.SetText("") // Clear search text
+				fzfMemberSearchEntry.SetText("")
 			}
-			filterFzfMembers("") // This will clear the list and detail
+			filterFzfMembers("")
 		}
 	}
 
@@ -1643,11 +1627,6 @@ func main() {
 						}
 						logRefreshPending = false
 					}
-					// For FZF style, the list updates on text change, but if members list itself changed,
-					// we might need to trigger a re-filter if the membership tab is active.
-					// loadMembers() already reloads `members`. The OnSelected handler for membership tab
-					// already clears the search, which triggers a re-filter with empty text.
-					// If the tab is not selected, the change will be picked up when it is selected.
 
 					if tabs != nil {
 						tabs.Refresh()
