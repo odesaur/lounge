@@ -783,6 +783,7 @@ func buildLogView() fyne.CanvasObject {
 	return container.NewScroll(logTable)
 }
 
+// Load members from CSV file, reading from 3rd and 4th columns
 func loadMembers() {
 	memberCsvFile, err := os.Open(memberFile)
 	if err != nil {
@@ -798,8 +799,8 @@ func loadMembers() {
 	rows, _ := csvReader.ReadAll()
 	members = []Member{}
 	for _, row := range rows {
-		if len(row) == 2 {
-			members = append(members, Member{Name: row[0], ID: row[1]})
+		if len(row) >= 4 {
+			members = append(members, Member{Name: row[2], ID: row[3]})
 		}
 	}
 	membershipFilteredMembers = []Member{}
@@ -809,19 +810,47 @@ func getNextMemberID() string {
 	return strconv.Itoa(len(members) + 1)
 }
 
+// Append new member to CSV file
 func appendMember(memberToAppend Member) {
-	memberCsvFile, err := os.OpenFile(memberFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	memberCsvFile, err := os.OpenFile(memberFile, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		fmt.Println("Error opening member file for append:", err)
 		return
 	}
 	defer memberCsvFile.Close()
-	csvWriter := csv.NewWriter(memberCsvFile)
-	err = csvWriter.Write([]string{memberToAppend.Name, memberToAppend.ID})
-	if err != nil {
-		fmt.Println("Error writing member to CSV:", err)
+
+	csvReader := csv.NewReader(memberCsvFile)
+	existingRows, readErr := csvReader.ReadAll()
+	if readErr != nil && readErr != io.EOF {
+		fmt.Println("Error reading existing CSV data:", readErr)
 		return
 	}
+
+	memberCsvFile.Seek(0, 0)
+	memberCsvFile.Truncate(0)
+
+	csvWriter := csv.NewWriter(memberCsvFile)
+
+	// Write existing rows
+	for _, row := range existingRows {
+		if err := csvWriter.Write(row); err != nil {
+			fmt.Println("Error writing existing row to CSV:", err)
+			return
+		}
+	}
+
+	// Create new row with empty first two columns
+	newRow := make([]string, 4)
+	newRow[0] = ""
+	newRow[1] = ""
+	newRow[2] = memberToAppend.Name
+	newRow[3] = memberToAppend.ID
+
+	if err := csvWriter.Write(newRow); err != nil {
+		fmt.Println("Error writing new member to CSV:", err)
+		return
+	}
+
 	csvWriter.Flush()
 	if err := csvWriter.Error(); err != nil {
 		fmt.Println("Error flushing CSV writer for member:", err)
@@ -1356,7 +1385,6 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 		}
 	}
 
-	// Create user ID row with button on the same line
 	userIDRow := container.NewBorder(nil, nil, nil, noIDButton, idEntry)
 
 	formWidget := widget.NewForm(
@@ -1572,6 +1600,7 @@ func main() {
 
 	mainWindow.SetContent(mainApplicationContent)
 
+	// Update UI periodically and check for date changes
 	go func() {
 		uiUpdateTicker := time.NewTicker(time.Second)
 		dailyLogCheckTicker := time.NewTicker(time.Minute * 5)
