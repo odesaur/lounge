@@ -787,9 +787,6 @@ func buildLogView() fyne.CanvasObject {
 func loadMembers() {
 	memberCsvFile, err := os.Open(memberFile)
 	if err != nil {
-		if newMemberFile, createErr := os.Create(memberFile); createErr == nil {
-			newMemberFile.Close()
-		}
 		members = []Member{}
 		membershipFilteredMembers = []Member{}
 		return
@@ -1028,9 +1025,6 @@ func getDeviceByUserID(userID string) *Device {
 }
 
 func registerUser(name, userID string, deviceID int) error {
-	if _, err := strconv.Atoi(userID); err != nil {
-		return fmt.Errorf("user ID must be numeric")
-	}
 	if getUserByID(userID) != nil {
 		existingUser := getUserByID(userID)
 		return fmt.Errorf("user ID %s (%s) already checked in on Device %d", userID, existingUser.Name, existingUser.PCID)
@@ -1059,10 +1053,6 @@ func registerUser(name, userID string, deviceID int) error {
 }
 
 func checkoutUser(userID string) error {
-	if _, err := strconv.Atoi(userID); err != nil {
-		return fmt.Errorf("user ID must be numeric")
-	}
-
 	userToCheckout := getUserByID(userID)
 	if userToCheckout == nil {
 		return fmt.Errorf("user ID %s not found among active users", userID)
@@ -1311,11 +1301,12 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 	deviceEntryWidget := widget.NewEntry()
 
 	nameEntry.SetPlaceHolder("Full Name")
-	idEntry.SetPlaceHolder("9 Digits Student ID")
+	idEntry.SetPlaceHolder("ID")
 
 	noIDButton := widget.NewButton("No ID?", func() {
 		nextID := getNextMemberID()
 		idEntry.SetText(nextID)
+		idEntry.SetText("LOUNGE-" + getNextMemberID())
 	})
 	noIDButton.Resize(fyne.NewSize(55, 25))
 
@@ -1399,10 +1390,6 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 
 		if userName == "" || userIDString == "" {
 			dialog.ShowError(fmt.Errorf("name and ID are required"), mainWindow)
-			return
-		}
-		if _, err := strconv.Atoi(userIDString); err != nil {
-			dialog.ShowError(fmt.Errorf("ID must be numeric"), mainWindow)
 			return
 		}
 
