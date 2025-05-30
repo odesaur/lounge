@@ -57,8 +57,11 @@ type Device struct {
 }
 
 type Member struct {
-	Name string
-	ID   string
+	Name          string
+	ID            string
+	Email         string
+	StudentNumber string
+	PhoneNumber   string
 }
 
 type LogEntry struct {
@@ -74,23 +77,18 @@ var (
 	allDevices                []Device
 	activeUsers               []User
 	members                   []Member
-	membershipFilteredMembers []Member
 	mainWindow                fyne.Window
 	logTable                  *widget.Table
 	refreshTrigger            = make(chan bool, 1)
 	logRefreshPending         = false
 	logFileMutex              sync.Mutex
 	currentLogEntries         []LogEntry
-	fzfMemberSearchEntry      *widget.Entry
 	tabs                      *container.AppTabs
 	deviceStatusTabIndex      int = -1
 	activeUsersTabIndex       int = -1
-	membershipTabIndex        int = -1
 	logTabIndex               int = -1
 	deviceHoverDetailLabel    *widget.Label
 	activeUserNetworkInstance *ActiveUserNetworkWidget
-	membershipResultsList     *widget.List
-	membershipDetailLabel     *widget.Label
 )
 
 type classicTheme struct{ fyne.Theme }
@@ -102,9 +100,11 @@ func (themeInstance *classicTheme) Color(name fyne.ThemeColorName, variant fyne.
 	classicButtonFace := color.NRGBA{R: 0xD4, G: 0xD0, B: 0xC8, A: 0xFF}
 	classicText := color.Black
 	classicPrimary := color.NRGBA{R: 0x00, G: 0x00, B: 0x80, A: 0xFF}
-	classicDisabledText := color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xFF}
+	classicDisabled := color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xFF}
 	classicInputBorder := color.NRGBA{R: 0x40, G: 0x40, B: 0x40, A: 0xFF}
 	classicShadow := color.NRGBA{R: 0x80, G: 0x80, B: 0x80, A: 0xFF}
+
+	lightBlue := color.NRGBA{R: 0x66, G: 0x9C, B: 0xFF, A: 0xFF}
 
 	switch name {
 	case theme.ColorNameBackground:
@@ -115,18 +115,14 @@ func (themeInstance *classicTheme) Color(name fyne.ThemeColorName, variant fyne.
 		return classicPrimary
 	case theme.ColorNameHover:
 		return color.NRGBA{R: 0xB0, G: 0xB0, B: 0xD0, A: 0xFF}
-	case theme.ColorNameFocus:
-		return classicPrimary
-	case theme.ColorNameSelection:
-		return classicPrimary
+	case theme.ColorNameFocus, theme.ColorNameSelection:
+		return lightBlue
 	case theme.ColorNameShadow:
 		return classicShadow
 	case theme.ColorNameInputBorder:
 		return classicInputBorder
-	case theme.ColorNameDisabled:
-		return classicDisabledText
-	case theme.ColorNamePlaceHolder:
-		return classicDisabledText
+	case theme.ColorNameDisabled, theme.ColorNamePlaceHolder:
+		return classicDisabled
 	case theme.ColorNameForeground:
 		return classicText
 	case theme.ColorNameSeparator:
@@ -783,31 +779,40 @@ func buildLogView() fyne.CanvasObject {
 	return container.NewScroll(logTable)
 }
 
-// Load members from CSV file, reading from 3rd and 4th columns
 func loadMembers() {
 	memberCsvFile, err := os.Open(memberFile)
 	if err != nil {
-		members = []Member{}
-		membershipFilteredMembers = []Member{}
+		members = nil
 		return
 	}
 	defer memberCsvFile.Close()
+
 	csvReader := csv.NewReader(memberCsvFile)
 	rows, _ := csvReader.ReadAll()
-	members = []Member{}
-	for _, row := range rows {
-		if len(row) >= 4 {
-			members = append(members, Member{Name: row[2], ID: row[3]})
+
+	start := 0
+	if len(rows) > 0 && strings.EqualFold(rows[0][1], "email address") {
+		start = 1
+	}
+
+	members = nil
+	for _, row := range rows[start:] {
+		if len(row) >= 5 {
+			members = append(members, Member{
+				Email:         row[1],
+				Name:          row[2],
+				StudentNumber: row[3],
+				PhoneNumber:   row[4],
+				ID:            row[3],
+			})
 		}
 	}
-	membershipFilteredMembers = []Member{}
 }
 
 func getNextMemberID() string {
 	return strconv.Itoa(len(members) + 1)
 }
 
-// Append new member to CSV file
 func appendMember(memberToAppend Member) {
 	memberCsvFile, err := os.OpenFile(memberFile, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
@@ -828,7 +833,6 @@ func appendMember(memberToAppend Member) {
 
 	csvWriter := csv.NewWriter(memberCsvFile)
 
-	// Write existing rows
 	for _, row := range existingRows {
 		if err := csvWriter.Write(row); err != nil {
 			fmt.Println("Error writing existing row to CSV:", err)
@@ -836,7 +840,6 @@ func appendMember(memberToAppend Member) {
 		}
 	}
 
-	// Create new row with empty first two columns
 	newRow := make([]string, 4)
 	newRow[0] = ""
 	newRow[1] = ""
@@ -854,9 +857,6 @@ func appendMember(memberToAppend Member) {
 	}
 
 	members = append(members, memberToAppend)
-	if fzfMemberSearchEntry != nil && membershipResultsList != nil {
-		filterFzfMembers(fzfMemberSearchEntry.Text)
-	}
 }
 
 func memberByID(memberID string) *Member {
@@ -866,85 +866,6 @@ func memberByID(memberID string) *Member {
 		}
 	}
 	return nil
-}
-
-func filterFzfMembers(searchTextValue string) {
-	searchTextValue = strings.ToLower(strings.TrimSpace(searchTextValue))
-	newFilteredMembers := []Member{}
-	if searchTextValue != "" {
-		for _, member := range members {
-			if strings.Contains(strings.ToLower(member.Name), searchTextValue) || strings.Contains(strings.ToLower(member.ID), searchTextValue) {
-				newFilteredMembers = append(newFilteredMembers, member)
-			}
-		}
-	}
-	membershipFilteredMembers = newFilteredMembers
-	if membershipResultsList != nil {
-		membershipResultsList.Refresh()
-		if len(membershipFilteredMembers) == 0 && searchTextValue == "" {
-			membershipResultsList.Hide()
-			if membershipDetailLabel != nil {
-				membershipDetailLabel.SetText("")
-			}
-		} else {
-			membershipResultsList.Show()
-		}
-	}
-}
-
-func buildMembershipView() fyne.CanvasObject {
-	fzfMemberSearchEntry = widget.NewEntry()
-	fzfMemberSearchEntry.SetPlaceHolder("Search Members (Name/ID)...")
-
-	membershipFilteredMembers = []Member{}
-
-	membershipDetailLabel = widget.NewLabel("Select a member from the list to see details.")
-	membershipDetailLabel.Wrapping = fyne.TextWrapWord
-	membershipDetailLabel.Alignment = fyne.TextAlignCenter
-
-	membershipResultsList = widget.NewList(
-		func() int { return len(membershipFilteredMembers) },
-		func() fyne.CanvasObject {
-			return container.NewBorder(
-				nil, nil, widget.NewLabel("Name Holder"), widget.NewLabel("ID Holder"),
-			)
-		},
-		func(itemID widget.ListItemID, itemCanvasObject fyne.CanvasObject) {
-			if itemID < len(membershipFilteredMembers) {
-				member := membershipFilteredMembers[itemID]
-				containerObject := itemCanvasObject.(*fyne.Container)
-				nameLabel := containerObject.Objects[0].(*widget.Label)
-				idLabel := containerObject.Objects[1].(*widget.Label)
-				nameLabel.SetText(member.Name)
-				idLabel.SetText(member.ID)
-			}
-		},
-	)
-
-	membershipResultsList.OnSelected = func(selectedID widget.ListItemID) {
-		if selectedID < len(membershipFilteredMembers) {
-			selectedMember := membershipFilteredMembers[selectedID]
-			membershipDetailLabel.SetText(fmt.Sprintf("Selected Member:\nName: %s\nID: %s", selectedMember.Name, selectedMember.ID))
-		}
-	}
-	membershipResultsList.Hide()
-
-	fzfMemberSearchEntry.OnChanged = func(text string) {
-		filterFzfMembers(text)
-		if text == "" {
-			membershipDetailLabel.SetText("Select a member from the list to see details.")
-		}
-	}
-
-	scrollableResults := container.NewScroll(membershipResultsList)
-	scrollableResults.SetMinSize(fyne.NewSize(300, 200))
-
-	topContent := container.NewVBox(
-		fzfMemberSearchEntry,
-		scrollableResults,
-	)
-
-	return container.NewBorder(topContent, membershipDetailLabel, nil, nil)
 }
 
 func initData() {
@@ -1304,8 +1225,6 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 	idEntry.SetPlaceHolder("ID")
 
 	noIDButton := widget.NewButton("No ID?", func() {
-		nextID := getNextMemberID()
-		idEntry.SetText(nextID)
 		idEntry.SetText("LOUNGE-" + getNextMemberID())
 	})
 	noIDButton.Resize(fyne.NewSize(55, 25))
@@ -1512,7 +1431,6 @@ func main() {
 
 	deviceStatusTabContent := buildDeviceRoomContent()
 	activeUsersTabContent := buildActiveUsersInfoTabView()
-	membershipView := buildMembershipView()
 	logView := buildLogView()
 
 	resetLayoutButton := widget.NewButton("Reset Network Layout", func() {
@@ -1541,7 +1459,6 @@ func main() {
 	tabs = container.NewAppTabs(
 		container.NewTabItem("Device Status", deviceStatusTabContent),
 		container.NewTabItem("Active Users", activeUsersTabContent),
-		container.NewTabItem("Membership", membershipView),
 		container.NewTabItem("Log", logView),
 	)
 
@@ -1551,8 +1468,6 @@ func main() {
 			deviceStatusTabIndex = index
 		case "Active Users":
 			activeUsersTabIndex = index
-		case "Membership":
-			membershipTabIndex = index
 		case "Log":
 			logTabIndex = index
 		}
@@ -1573,11 +1488,6 @@ func main() {
 			if activeUserNetworkInstance != nil {
 				activeUserNetworkInstance.UpdateUsers(activeUsers)
 			}
-		} else if selectedTabItem.Text == "Membership" && membershipTabIndex != -1 {
-			if fzfMemberSearchEntry != nil {
-				fzfMemberSearchEntry.SetText("")
-			}
-			filterFzfMembers("")
 		}
 	}
 
@@ -1587,7 +1497,6 @@ func main() {
 
 	mainWindow.SetContent(mainApplicationContent)
 
-	// Update UI periodically and check for date changes
 	go func() {
 		uiUpdateTicker := time.NewTicker(time.Second)
 		dailyLogCheckTicker := time.NewTicker(time.Minute * 5)
