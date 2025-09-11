@@ -763,7 +763,51 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 		topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
 		if ev.Position.X >= topLeft.X && ev.Position.X <= topLeft.X+size &&
 			ev.Position.Y >= topLeft.Y && ev.Position.Y <= topLeft.Y+size {
+
 			if d.Status == "occupied" {
+				if d.Type == "Console" {
+					userIDs := activeUserIDsOnDevice(d.ID)
+					if len(userIDs) == 0 {
+						return
+					}
+					display := []string{}
+					for _, id := range userIDs {
+						u := getUserByID(id)
+						name := "Unknown User"
+						if u != nil {
+							name = u.Name
+						}
+						display = append(display, fmt.Sprintf("%s (ID: %s)", name, id))
+					}
+					selector := widget.NewSelectEntry(display)
+					formItems := []*widget.FormItem{{Text: "User on " + d.Type, Widget: selector}}
+					dialogInstance := dialog.NewForm("Checkout From "+d.Type, "Check Out", "Cancel", formItems, func(confirmed bool) {
+						if !confirmed {
+							return
+						}
+						choice := strings.TrimSpace(selector.Text)
+						if choice == "" {
+							return
+						}
+						var targetID string
+						for i, s := range display {
+							if s == choice {
+								targetID = userIDs[i]
+								break
+							}
+						}
+						if targetID == "" {
+							return
+						}
+						if err := checkoutUser(targetID); err != nil {
+							dialog.ShowError(err, mainWindow)
+						}
+					}, mainWindow)
+					dialogInstance.Resize(fyne.NewSize(420, dialogInstance.MinSize().Height))
+					dialogInstance.Show()
+					return
+				}
+
 				user := getUserByID(d.UserID)
 				userName := "Unknown User"
 				if user != nil {
@@ -1242,7 +1286,9 @@ func initData() {
 					for deviceIndex := range allDevices {
 						if allDevices[deviceIndex].ID == user.PCID {
 							allDevices[deviceIndex].Status = "occupied"
-							allDevices[deviceIndex].UserID = user.ID
+							if allDevices[deviceIndex].Type == "PC" {
+								allDevices[deviceIndex].UserID = user.ID
+							}
 							break
 						}
 					}
@@ -1299,6 +1345,17 @@ func getDeviceByUserID(userID string) *Device {
 	return nil
 }
 
+// returns the active user IDs currently assigned to a device ID
+func activeUserIDsOnDevice(deviceID int) []string {
+	ids := []string{}
+	for _, u := range activeUsers {
+		if u.PCID == deviceID {
+			ids = append(ids, u.ID)
+		}
+	}
+	return ids
+}
+
 func registerUser(name, userID string, deviceID int) error {
 	if getUserByID(userID) != nil {
 		existingUser := getUserByID(userID)
@@ -1308,12 +1365,16 @@ func registerUser(name, userID string, deviceID int) error {
 	if device == nil {
 		return fmt.Errorf("device ID %d does not exist", deviceID)
 	}
-	if device.Status != "free" {
-		return fmt.Errorf("device %d is busy (occupied by UserID: %s)", deviceID, device.UserID)
-	}
 
-	device.Status = "occupied"
-	device.UserID = userID
+	if device.Type == "PC" {
+		if device.Status != "free" {
+			return fmt.Errorf("device %d is busy (occupied by UserID: %s)", deviceID, device.UserID)
+		}
+		device.Status = "occupied"
+		device.UserID = userID
+	} else {
+		device.Status = "occupied"
+	}
 
 	newUser := User{ID: userID, Name: name, CheckInTime: time.Now(), PCID: deviceID}
 	activeUsers = append(activeUsers, newUser)
@@ -1340,30 +1401,29 @@ func checkoutUser(userID string) error {
 			break
 		}
 	}
-
 	if userIndex == -1 {
 		return fmt.Errorf("user %s consistency error: found by ID but not in slice iteration", userID)
 	}
 
 	originalCheckInTime := userToCheckout.CheckInTime
-	deviceUsed := getDeviceByUserID(userID)
 	loggedDeviceID := userToCheckout.PCID
-
-	if deviceUsed != nil {
-		loggedDeviceID = deviceUsed.ID
-		deviceUsed.Status = "free"
-		deviceUsed.UserID = ""
-	} else {
-		deviceFromUserStruct := getDeviceByID(userToCheckout.PCID)
-		if deviceFromUserStruct != nil && deviceFromUserStruct.UserID == userID {
-			deviceFromUserStruct.Status = "free"
-			deviceFromUserStruct.UserID = ""
-		} else {
-			fmt.Printf("Warning: Could not find device for user %s (ID: %s) by UserID lookup. Device %d may need manual check.\n", userToCheckout.Name, userID, userToCheckout.PCID)
-		}
-	}
+	deviceUsed := getDeviceByID(loggedDeviceID)
 
 	activeUsers = append(activeUsers[:userIndex], activeUsers[userIndex+1:]...)
+
+	if deviceUsed != nil {
+		if deviceUsed.Type == "PC" {
+			deviceUsed.Status = "free"
+			deviceUsed.UserID = ""
+		} else {
+			remaining := activeUserIDsOnDevice(deviceUsed.ID)
+			if len(remaining) == 0 {
+				deviceUsed.Status = "free"
+			} else {
+				deviceUsed.Status = "occupied"
+			}
+		}
+	}
 
 	if activeUserNetworkInstance != nil {
 		delete(activeUserNetworkInstance.pcPositions, userID)
@@ -1392,6 +1452,49 @@ func NewDeviceButton(device *Device) *DeviceButton {
 
 func (button *DeviceButton) Tapped(_ *fyne.PointEvent) {
 	if button.device.Status == "occupied" {
+		if button.device.Type == "Console" {
+			userIDs := activeUserIDsOnDevice(button.device.ID)
+			if len(userIDs) == 0 {
+				return
+			}
+			display := []string{}
+			for _, id := range userIDs {
+				u := getUserByID(id)
+				name := "Unknown User"
+				if u != nil {
+					name = u.Name
+				}
+				display = append(display, fmt.Sprintf("%s (ID: %s)", name, id))
+			}
+			selector := widget.NewSelectEntry(display)
+			formItems := []*widget.FormItem{{Text: "User on " + button.device.Type, Widget: selector}}
+			dialogInstance := dialog.NewForm("Checkout From "+button.device.Type, "Check Out", "Cancel", formItems, func(confirmed bool) {
+				if !confirmed {
+					return
+				}
+				choice := strings.TrimSpace(selector.Text)
+				if choice == "" {
+					return
+				}
+				var targetID string
+				for i, s := range display {
+					if s == choice {
+						targetID = userIDs[i]
+						break
+					}
+				}
+				if targetID == "" {
+					return
+				}
+				if err := checkoutUser(targetID); err != nil {
+					dialog.ShowError(err, mainWindow)
+				}
+			}, mainWindow)
+			dialogInstance.Resize(fyne.NewSize(420, dialogInstance.MinSize().Height))
+			dialogInstance.Show()
+			return
+		}
+
 		user := getUserByID(button.device.UserID)
 		userName := "Unknown User"
 		if user != nil {
@@ -1411,21 +1514,43 @@ func (button *DeviceButton) Tapped(_ *fyne.PointEvent) {
 }
 
 func (button *DeviceButton) MouseIn(_ *desktop.MouseEvent) {
-	if button.device.Status == "occupied" && deviceHoverDetailLabel != nil {
-		user := getUserByID(button.device.UserID)
-		if user != nil {
-			device := getDeviceByID(user.PCID)
-			deviceType := "Unknown Device"
-			if device != nil {
-				deviceType = device.Type
-			}
-			infoText := fmt.Sprintf("Using %s %d: %s (ID: %s)\nChecked In: %s  |  Usage: %s",
-				deviceType, user.PCID, user.Name, user.ID,
-				user.CheckInTime.Format("15:04:05 (Jan 02)"), getFormattedUsageDuration(user.CheckInTime))
-			deviceHoverDetailLabel.SetText(infoText)
-		} else {
-			deviceHoverDetailLabel.SetText(fmt.Sprintf("%s %d: User details not found (UserID: %s).", button.device.Type, button.device.ID, button.device.UserID))
+	if deviceHoverDetailLabel == nil {
+		return
+	}
+	if button.device.Status != "occupied" {
+		deviceHoverDetailLabel.SetText("")
+		return
+	}
+	if button.device.Type == "Console" {
+		userIDs := activeUserIDsOnDevice(button.device.ID)
+		if len(userIDs) == 0 {
+			deviceHoverDetailLabel.SetText("")
+			return
 		}
+		lines := []string{}
+		for _, id := range userIDs {
+			u := getUserByID(id)
+			if u != nil {
+				lines = append(lines, fmt.Sprintf("%s (ID: %s) In: %s  |  Usage: %s",
+					u.Name, u.ID, u.CheckInTime.Format("15:04:05 (Jan 02)"), getFormattedUsageDuration(u.CheckInTime)))
+			}
+		}
+		deviceHoverDetailLabel.SetText(fmt.Sprintf("%s %d:\n%s", button.device.Type, button.device.ID, strings.Join(lines, "\n")))
+		return
+	}
+	user := getUserByID(button.device.UserID)
+	if user != nil {
+		device := getDeviceByID(user.PCID)
+		deviceType := "Unknown Device"
+		if device != nil {
+			deviceType = device.Type
+		}
+		infoText := fmt.Sprintf("Using %s %d: %s (ID: %s)\nChecked In: %s  |  Usage: %s",
+			deviceType, user.PCID, user.Name, user.ID,
+			user.CheckInTime.Format("15:04:05 (Jan 02)"), getFormattedUsageDuration(user.CheckInTime))
+		deviceHoverDetailLabel.SetText(infoText)
+	} else {
+		deviceHoverDetailLabel.SetText(fmt.Sprintf("%s %d: User details not found (UserID: %s).", button.device.Type, button.device.ID, button.device.UserID))
 	}
 }
 
