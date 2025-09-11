@@ -86,7 +86,6 @@ var (
 	currentLogEntries         []LogEntry
 	tabs                      *container.AppTabs
 	deviceStatusTabIndex      int = -1
-	activeUsersTabIndex       int = -1
 	logTabIndex               int = -1
 	deviceHoverDetailLabel    *widget.Label
 	activeUserNetworkInstance *ActiveUserNetworkWidget
@@ -1648,15 +1647,23 @@ func buildDeviceRoomContent() fyne.CanvasObject {
 		deviceHoverDetailLabel.Wrapping = fyne.TextWrapWord
 		deviceHoverDetailLabel.Alignment = fyne.TextAlignCenter
 	}
-	return container.NewBorder(nil, deviceHoverDetailLabel, nil, nil, layoutWidget)
-}
 
-func buildActiveUsersInfoTabView() fyne.CanvasObject {
+	// right side = the same network widget used previously in "Active Users" tab
 	if activeUserNetworkInstance == nil {
 		activeUserNetworkInstance = NewActiveUserNetworkWidget()
 	}
 	activeUserNetworkInstance.UpdateUsers(activeUsers)
-	return activeUserNetworkInstance
+
+	right := container.NewBorder(
+		widget.NewLabelWithStyle("Active Users", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
+		nil, nil, nil,
+		activeUserNetworkInstance,
+	)
+
+	split := container.NewHSplit(layoutWidget, right)
+	split.Offset = 0.68 // left/right ratio; tweak to taste
+
+	return container.NewBorder(nil, deviceHoverDetailLabel, nil, nil, split)
 }
 
 func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
@@ -1881,11 +1888,10 @@ func main() {
 	activeUserNetworkInstance = NewActiveUserNetworkWidget()
 
 	deviceStatusTabContent := buildDeviceRoomContent()
-	activeUsersTabContent := buildActiveUsersInfoTabView()
 	logView := buildLogView()
 
 	resetLayoutButton := widget.NewButton("Reset Network Layout", func() {
-		if activeUserNetworkInstance != nil && tabs.Selected() != nil && tabs.Selected().Text == "Active Users" {
+		if activeUserNetworkInstance != nil {
 			activeUserNetworkInstance.pcPositions = make(map[string]fyne.Position)
 			activeUserNetworkInstance.UpdateUsers(activeUsers)
 		}
@@ -1909,7 +1915,6 @@ func main() {
 
 	tabs = container.NewAppTabs(
 		container.NewTabItem("Device Status", deviceStatusTabContent),
-		container.NewTabItem("Active Users", activeUsersTabContent),
 		container.NewTabItem("Log", logView),
 	)
 
@@ -1917,8 +1922,6 @@ func main() {
 		switch tabItem.Text {
 		case "Device Status":
 			deviceStatusTabIndex = index
-		case "Active Users":
-			activeUsersTabIndex = index
 		case "Log":
 			logTabIndex = index
 		}
@@ -1934,11 +1937,6 @@ func main() {
 				logTable.Refresh()
 			}
 			logRefreshPending = false
-		} else if selectedTabItem.Text == "Active Users" && activeUsersTabIndex != -1 {
-			resetLayoutButton.Show()
-			if activeUserNetworkInstance != nil {
-				activeUserNetworkInstance.UpdateUsers(activeUsers)
-			}
 		}
 	}
 
@@ -1959,7 +1957,7 @@ func main() {
 			select {
 			case <-uiUpdateTicker.C:
 				fyne.Do(func() {
-					if tabs.Selected() != nil && tabs.Selected().Text == "Active Users" {
+					if tabs.Selected() != nil && tabs.Selected().Text == "Device Status" {
 						if activeUserNetworkInstance != nil {
 							activeUserNetworkInstance.Refresh()
 						}
@@ -1987,11 +1985,6 @@ func main() {
 
 					if activeUserNetworkInstance != nil {
 						activeUserNetworkInstance.UpdateUsers(activeUsers)
-					}
-					if activeUsersTabIndex != -1 && tabs != nil && len(tabs.Items) > activeUsersTabIndex {
-						if tabs.Items[activeUsersTabIndex].Content != activeUserNetworkInstance {
-							tabs.Items[activeUsersTabIndex].Content = activeUserNetworkInstance
-						}
 					}
 
 					updateStatusLabels()
