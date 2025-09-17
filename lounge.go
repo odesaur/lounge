@@ -1,4 +1,3 @@
-
 package main
 
 import (
@@ -32,8 +31,6 @@ const (
 	memberFile       = "membership.csv"
 	logDir           = "log"
 	imgBaseDir       = "src"
-
-	pcImageSize float32 = 48
 )
 
 type User struct {
@@ -68,20 +65,15 @@ type LogEntry struct {
 }
 
 var (
-	allDevices                []Device
-	activeUsers               []User
-	members                   []Member
-	mainWindow                fyne.Window
-	logTable                  *widget.Table
-	refreshTrigger            = make(chan bool, 1)
-	logRefreshPending         = false
-	logFileMutex              sync.Mutex
-	currentLogEntries         []LogEntry
-	tabs                      *container.AppTabs
-	deviceStatusTabIndex      int = -1
-	logTabIndex               int = -1
-	deviceHoverDetailLabel    *widget.Label
-	activeUserNetworkInstance *ActiveUserNetworkWidget
+	allDevices        []Device
+	activeUsers       []User
+	members           []Member
+	mainWindow        fyne.Window
+	logTable          *widget.Table
+	refreshTrigger    = make(chan bool, 1)
+	logRefreshPending = false
+	logFileMutex      sync.Mutex
+	currentLogEntries []LogEntry
 
 	assignmentUserID         string
 	assignmentNoticeLabel    *widget.Label
@@ -95,7 +87,8 @@ var (
 	raccoonIconResource      fyne.Resource
 )
 
-// Small clickable avatar for a queued user.
+// ---------- Small queued-user icon ----------
+
 type PendingUserIcon struct {
 	widget.BaseWidget
 	user     User
@@ -169,120 +162,8 @@ func refreshPendingIcons() {
 	pendingIconsBox.Refresh()
 }
 
-// ActiveUserNetworkWidget (compact list)
-type ActiveUserNetworkWidget struct {
-	widget.BaseWidget
-	users            []User
-	pcPositions      map[string]fyne.Position
-	busyPCImage      fyne.Resource
-	consoleBusyImage fyne.Resource
-	list             *widget.List
-}
+// ---------- Device layout widget ----------
 
-func NewActiveUserNetworkWidget() *ActiveUserNetworkWidget {
-	w := &ActiveUserNetworkWidget{
-		users:       make([]User, 0),
-		pcPositions: make(map[string]fyne.Position),
-	}
-	if p := filepath.Join(imgBaseDir, "busy.png"); fileExists(p) {
-		w.busyPCImage, _ = fyne.LoadResourceFromPath(p)
-	} else {
-		w.busyPCImage = theme.ComputerIcon()
-	}
-	if p := filepath.Join(imgBaseDir, "console_busy.png"); fileExists(p) {
-		w.consoleBusyImage, _ = fyne.LoadResourceFromPath(p)
-	} else {
-		w.consoleBusyImage = w.busyPCImage
-	}
-	w.ExtendBaseWidget(w)
-	return w
-}
-
-func (w *ActiveUserNetworkWidget) UpdateUsers(users []User) {
-	w.users = append([]User(nil), users...)
-	if w.list != nil {
-		w.list.Refresh()
-	}
-	w.Refresh()
-}
-
-type activeUserNetworkRenderer struct {
-	widget  *ActiveUserNetworkWidget
-	objects []fyne.CanvasObject
-}
-
-func (r *activeUserNetworkRenderer) buildListItem() fyne.CanvasObject {
-	img := canvas.NewImageFromResource(r.widget.busyPCImage)
-	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(pcImageSize, pcImageSize))
-
-	line1 := widget.NewLabel("")
-	name := widget.NewLabel("")
-	name.TextStyle = fyne.TextStyle{Bold: true}
-	line3 := widget.NewLabel("")
-	line4 := widget.NewLabel("")
-	line5 := widget.NewLabel("")
-
-	textCol := container.NewVBox(line1, name, line3, line4, line5)
-	return container.NewHBox(img, textCol)
-}
-
-func (r *activeUserNetworkRenderer) bindListItem(o fyne.CanvasObject, u User) {
-	row := o.(*fyne.Container)
-	img := row.Objects[0].(*canvas.Image)
-	textCol := row.Objects[1].(*fyne.Container)
-
-	line1 := textCol.Objects[0].(*widget.Label)
-	name := textCol.Objects[1].(*widget.Label)
-	line3 := textCol.Objects[2].(*widget.Label)
-	line4 := textCol.Objects[3].(*widget.Label)
-	line5 := textCol.Objects[4].(*widget.Label)
-
-	device := getDeviceByID(u.PCID)
-	res := r.widget.busyPCImage
-	if device != nil && device.Type == "Console" && r.widget.consoleBusyImage != nil {
-		res = r.widget.consoleBusyImage
-	}
-	img.Resource = res
-	img.Refresh()
-
-	line1.SetText(fmt.Sprintf("PC: %d", u.PCID))
-	name.SetText(u.Name)
-	line3.SetText(fmt.Sprintf("ID: %s", u.ID))
-	line4.SetText(fmt.Sprintf("In: %s", u.CheckInTime.Format("15:04:05")))
-	line5.SetText(fmt.Sprintf("Up: %s", getFormattedUsageDuration(u.CheckInTime)))
-}
-
-func (r *activeUserNetworkRenderer) Layout(size fyne.Size) { r.objects[0].Resize(size) }
-func (r *activeUserNetworkRenderer) MinSize() fyne.Size    { return fyne.NewSize(320, 300) }
-func (r *activeUserNetworkRenderer) Refresh() {
-	if r.widget.list != nil {
-		r.widget.list.Refresh()
-	}
-	canvas.Refresh(r.widget)
-}
-func (r *activeUserNetworkRenderer) Objects() []fyne.CanvasObject { return r.objects }
-func (r *activeUserNetworkRenderer) Destroy()                     {}
-
-func (w *ActiveUserNetworkWidget) CreateRenderer() fyne.WidgetRenderer {
-	if w.list == nil {
-		r := &activeUserNetworkRenderer{widget: w}
-		w.list = widget.NewList(
-			func() int { return len(w.users) },
-			func() fyne.CanvasObject { return r.buildListItem() },
-			func(i widget.ListItemID, o fyne.CanvasObject) {
-				if i >= 0 && i < len(w.users) {
-					r.bindListItem(o, w.users[i])
-				}
-			},
-		)
-		r.objects = []fyne.CanvasObject{w.list}
-		return r
-	}
-	return &activeUserNetworkRenderer{widget: w, objects: []fyne.CanvasObject{w.list}}
-}
-
-// Device layout
 type DeviceStatusLayoutWidget struct {
 	widget.BaseWidget
 	containerSize    fyne.Size
@@ -292,11 +173,12 @@ type DeviceStatusLayoutWidget struct {
 	dragOffset       fyne.Position
 	isDragging       bool
 	transientDragPos fyne.Position
-	pcIconSize       float32
-	consoleIconSize  float32
-	slotSpacingX     float32
-	slotSpacingY     float32
-	slotMargin       float32
+
+	pcIconSize      float32
+	consoleIconSize float32
+	slotSpacingX    float32
+	slotSpacingY    float32
+	slotMargin      float32
 }
 
 func NewDeviceStatusLayoutWidget() *DeviceStatusLayoutWidget {
@@ -304,8 +186,8 @@ func NewDeviceStatusLayoutWidget() *DeviceStatusLayoutWidget {
 		deviceToSlot:    make(map[int]int),
 		pcIconSize:      64,
 		consoleIconSize: 64,
-		slotSpacingX:    110,
-		slotSpacingY:    110,
+		slotSpacingX:    120,
+		slotSpacingY:    150, // more vertical room for names
 		slotMargin:      24,
 	}
 	w.loadDeviceLayout()
@@ -386,7 +268,7 @@ func (w *DeviceStatusLayoutWidget) computeSlots() {
 	}
 	w.slotPositions = w.slotPositions[:0]
 	total := len(allDevices)
-	leftWidth := w.containerSize.Width * 0.75
+	leftWidth := w.containerSize.Width * 0.85
 	leftX := w.slotMargin
 	topY := w.slotMargin
 	rowHeights := []int{3, 3, 3, 3, 4}
@@ -417,7 +299,7 @@ func (w *DeviceStatusLayoutWidget) computeSlots() {
 
 func (w *DeviceStatusLayoutWidget) UpdateDevices() { w.ensureMapping(); w.Refresh() }
 
-// Click: checkout/assign/show check-in
+// Left-click behavior lives in Tapped; console right-click handled in MouseDown.
 func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 	for _, d := range allDevices {
 		center := w.positionForDevice(d.ID)
@@ -429,56 +311,20 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 			continue
 		}
 
-		if d.Status == "occupied" {
-			if d.Type == "Console" {
-				userIDs := activeUserIDsOnDevice(d.ID)
-				if len(userIDs) == 0 {
-					return
-				}
-				display := make([]string, 0, len(userIDs))
-				for _, id := range userIDs {
-					u := getUserByID(id)
-					name := "Unknown User"
-					if u != nil {
-						name = u.Name
-					}
-					display = append(display, fmt.Sprintf("%s (ID: %s)", name, id))
-				}
-				selector := widget.NewSelectEntry(display)
-				formItems := []*widget.FormItem{{Text: "User on " + d.Type, Widget: selector}}
-				dlg := dialog.NewForm("Checkout From "+d.Type, "Check Out", "Cancel", formItems, func(ok bool) {
-					if !ok {
-						return
-					}
-					choice := strings.TrimSpace(selector.Text)
-					if choice == "" {
-						return
-					}
-					var targetID string
-					for i, s := range display {
-						if s == choice {
-							targetID = userIDs[i]
-							break
-						}
-					}
-					if targetID == "" {
-						return
-					}
-					if err := checkoutUser(targetID); err != nil {
-						dialog.ShowError(err, mainWindow)
-					}
-				}, mainWindow)
-				dlg.Resize(fyne.NewSize(420, dlg.MinSize().Height))
-				dlg.Show()
-				return
-			}
+		// Consoles: left-click always adds another user
+		if d.Type == "Console" {
+			showCheckInDialogShared(d.ID, true)
+			return
+		}
 
-			user := getUserByID(d.UserID)
+		// PCs
+		if d.Status == "occupied" {
+			u := getUserByID(d.UserID)
 			name := "Unknown User"
-			if user != nil {
-				name = user.Name
+			if u != nil {
+				name = u.Name
 			}
-			dialog.ShowConfirm("Confirm Checkout", fmt.Sprintf("Checkout %s from %s %d?", name, d.Type, d.ID),
+			dialog.ShowConfirm("Confirm Checkout", fmt.Sprintf("Checkout %s from PC %d?", name, d.ID),
 				func(ok bool) {
 					if ok {
 						if err := checkoutUser(d.UserID); err != nil {
@@ -489,7 +335,8 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 			return
 		}
 
-		if assignmentUserID != "" { // assign pending user to this free device
+		// assignment from queue?
+		if assignmentUserID != "" {
 			target := assignmentUserID
 			assignmentUserID = ""
 			if assignmentNoticeLabel != nil {
@@ -505,6 +352,29 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 		return
 	}
 }
+
+func (w *DeviceStatusLayoutWidget) MouseDown(ev *desktop.MouseEvent) {
+	// Right-click on consoles: checkout selection
+	if ev.Button != desktop.MouseButtonSecondary {
+		return
+	}
+	for _, d := range allDevices {
+		if d.Type != "Console" {
+			continue
+		}
+		center := w.positionForDevice(d.ID)
+		size := w.iconSizeForDevice(d.ID)
+		topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
+		if ev.Position.X >= topLeft.X && ev.Position.X <= topLeft.X+size &&
+			ev.Position.Y >= topLeft.Y && ev.Position.Y <= topLeft.Y+size {
+			if d.Status == "occupied" {
+				showConsoleCheckoutDialog(d)
+			}
+			return
+		}
+	}
+}
+func (w *DeviceStatusLayoutWidget) MouseUp(_ *desktop.MouseEvent) {}
 
 func (w *DeviceStatusLayoutWidget) Dragged(ev *fyne.DragEvent) {
 	if !w.isDragging {
@@ -610,7 +480,28 @@ func (r *deviceStatusRenderer) Layout(size fyne.Size) {
 	r.widget.Refresh()
 }
 
-func (r *deviceStatusRenderer) MinSize() fyne.Size { return fyne.NewSize(700, 420) }
+func (r *deviceStatusRenderer) MinSize() fyne.Size { return fyne.NewSize(840, 520) }
+
+func firstLast(name string) string {
+	parts := strings.Fields(strings.TrimSpace(name))
+	if len(parts) >= 2 {
+		return parts[0] + " " + parts[1]
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return ""
+}
+
+func usersOnDevice(deviceID int) []User {
+	out := []User{}
+	for _, u := range activeUsers {
+		if u.PCID == deviceID {
+			out = append(out, u)
+		}
+	}
+	return out
+}
 
 func (r *deviceStatusRenderer) Refresh() {
 	r.objects = r.objects[:0]
@@ -640,19 +531,45 @@ func (r *deviceStatusRenderer) Refresh() {
 		icon.Move(fyne.NewPos(center.X-size/2, center.Y-size/2))
 		r.objects = append(r.objects, icon)
 
-		labelText := strconv.Itoa(d.ID)
-		if d.ID == 17 {
-			labelText = "Xbox " + labelText
+		// Name(s) under the icon
+		var nameText string
+		if d.Type == "PC" {
+			if d.Status == "occupied" {
+				if u := getUserByID(d.UserID); u != nil {
+					nameText = firstLast(u.Name)
+				}
+			}
+		} else { // console
+			us := usersOnDevice(d.ID)
+			if len(us) > 0 {
+				names := []string{}
+				for _, u := range us {
+					names = append(names, firstLast(u.Name))
+				}
+				nameText = strings.Join(names, ", ")
+			}
 		}
-		if d.ID == 18 {
-			labelText = "PS4 " + labelText
+		if nameText != "" {
+			txt := canvas.NewText(nameText, theme.ForegroundColor())
+			txt.Alignment = fyne.TextAlignCenter
+			txt.TextSize = 12
+			txt.Move(fyne.NewPos(center.X-txt.MinSize().Width/2, center.Y+size/2-2))
+			r.objects = append(r.objects, txt)
+			// device id just below the name, smaller
+			idTxt := canvas.NewText(fmt.Sprintf("%d", d.ID), color.NRGBA{A: 255, R: 150, G: 150, B: 160})
+			idTxt.Alignment = fyne.TextAlignCenter
+			idTxt.TextSize = 10
+			idTxt.Move(fyne.NewPos(center.X-idTxt.MinSize().Width/2, center.Y+size/2+14))
+			r.objects = append(r.objects, idTxt)
+		} else {
+			// only device label
+			lbl := canvas.NewText(strconv.Itoa(d.ID), theme.ForegroundColor())
+			lbl.Alignment = fyne.TextAlignCenter
+			lbl.TextStyle.Bold = true
+			lbl.TextSize = 12
+			lbl.Move(fyne.NewPos(center.X-lbl.MinSize().Width/2, center.Y+size/2-2))
+			r.objects = append(r.objects, lbl)
 		}
-		label := canvas.NewText(labelText, theme.ForegroundColor())
-		label.TextStyle.Bold = true
-		label.Alignment = fyne.TextAlignCenter
-		label.TextSize = 12
-		label.Move(fyne.NewPos(center.X-label.MinSize().Width/2, center.Y+size/2-4))
-		r.objects = append(r.objects, label)
 	}
 	canvas.Refresh(r.widget)
 }
@@ -683,7 +600,8 @@ func (w *DeviceStatusLayoutWidget) nearestSlot(p fyne.Position) int {
 	return best
 }
 
-// Logs & members
+// ---------- Logs & members ----------
+
 func ensureLogDir() error { return os.MkdirAll(logDir, 0o755) }
 
 func getLogFilePath() string {
@@ -757,10 +675,8 @@ func recordLogEvent(isCheckIn bool, u User, deviceID int, original *time.Time) {
 	}
 	fyne.Do(func() {
 		currentLogEntries = entries
-		if tabs != nil && tabs.Selected() != nil && tabs.Selected().Text == "Log" {
-			if logTable != nil {
-				logTable.Refresh()
-			}
+		if logTable != nil {
+			logTable.Refresh()
 		} else {
 			logRefreshPending = true
 		}
@@ -847,7 +763,8 @@ func buildLogView() fyne.CanvasObject {
 	return container.NewScroll(logTable)
 }
 
-// Left-anchored responsive layout (child width = ratio * parent, clamped by min/max).
+// ---------- Left-anchored responsive layout ----------
+
 type leftRatioLayout struct {
 	ratio float32
 	minW  float32
@@ -881,7 +798,8 @@ func (l *leftRatioLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return min
 }
 
-// Inline check-in with membership search.
+// ---------- Inline check-in (with search) ----------
+
 func buildInlineCheckInForm() *fyne.Container {
 	checkInNameEntry = widget.NewEntry()
 	checkInNameEntry.SetPlaceHolder("Full Name")
@@ -990,7 +908,6 @@ func buildInlineCheckInForm() *fyne.Container {
 	bar := container.NewBorder(nil, nil, nil, hideButton, header)
 	card := container.NewVBox(bar, checkInSearchEntry, resultsScroll, form, addButton)
 
-	// Left anchored, responsive width (25% of window; 360-560px clamps)
 	wrapper := container.New(&leftRatioLayout{ratio: 0.25, minW: 360, maxW: 560}, container.NewPadded(card))
 	return wrapper
 }
@@ -1007,7 +924,8 @@ func buildPendingQueueView() fyne.CanvasObject {
 	return container.NewVBox(header, assignmentNoticeLabel, scroll)
 }
 
-// Members CSV
+// ---------- Members CSV ----------
+
 func loadMembers() {
 	f, err := os.Open(memberFile)
 	if err != nil {
@@ -1109,7 +1027,8 @@ func memberByID(id string) *Member {
 	return nil
 }
 
-// Data init & helpers
+// ---------- Data init & helpers ----------
+
 func initData() {
 	ensureLogDir()
 	allDevices = []Device{}
@@ -1142,10 +1061,6 @@ func initData() {
 		}
 	}
 	loadMembers()
-	if activeUserNetworkInstance != nil {
-		activeUserNetworkInstance.pcPositions = make(map[string]fyne.Position)
-		activeUserNetworkInstance.UpdateUsers(activeUsers)
-	}
 }
 
 func saveData() {
@@ -1173,15 +1088,6 @@ func getUserByID(id string) *User {
 func getDeviceByID(id int) *Device {
 	for i := range allDevices {
 		if allDevices[i].ID == id {
-			return &allDevices[i]
-		}
-	}
-	return nil
-}
-
-func getDeviceByUserID(id string) *Device {
-	for i := range allDevices {
-		if allDevices[i].UserID == id {
 			return &allDevices[i]
 		}
 	}
@@ -1266,10 +1172,6 @@ func checkoutUser(userID string) error {
 		}
 	}
 
-	if activeUserNetworkInstance != nil {
-		delete(activeUserNetworkInstance.pcPositions, userID)
-	}
-
 	saveData()
 	go recordLogEvent(false, *u, devID, &originalCheckIn)
 	refreshTrigger <- true
@@ -1329,238 +1231,66 @@ func getPendingUsers() []User {
 	return out
 }
 
-func getFormattedUsageDuration(start time.Time) string { return formatDuration(time.Since(start)) }
+// ---------- Console checkout selection ----------
 
-// Device button (legacy hover info)
-type DeviceButton struct {
-	widget.BaseWidget
-	device *Device
-}
-
-func NewDeviceButton(d *Device) *DeviceButton {
-	b := &DeviceButton{device: d}
-	b.ExtendBaseWidget(b)
-	return b
-}
-
-func (b *DeviceButton) Tapped(_ *fyne.PointEvent) {
-	if b.device.Status == "occupied" {
-		if b.device.Type == "Console" {
-			userIDs := activeUserIDsOnDevice(b.device.ID)
-			if len(userIDs) == 0 {
-				return
-			}
-			display := []string{}
-			for _, id := range userIDs {
-				u := getUserByID(id)
-				name := "Unknown User"
-				if u != nil {
-					name = u.Name
-				}
-				display = append(display, fmt.Sprintf("%s (ID: %s)", name, id))
-			}
-			selector := widget.NewSelectEntry(display)
-			items := []*widget.FormItem{{Text: "User on " + b.device.Type, Widget: selector}}
-			dlg := dialog.NewForm("Checkout From "+b.device.Type, "Check Out", "Cancel", items, func(ok bool) {
-				if !ok {
-					return
-				}
-				choice := strings.TrimSpace(selector.Text)
-				if choice == "" {
-					return
-				}
-				var targetID string
-				for i, s := range display {
-					if s == choice {
-						targetID = userIDs[i]
-						break
-					}
-				}
-				if targetID == "" {
-					return
-				}
-				if err := checkoutUser(targetID); err != nil {
-					dialog.ShowError(err, mainWindow)
-				}
-			}, mainWindow)
-			dlg.Resize(fyne.NewSize(420, dlg.MinSize().Height))
-			dlg.Show()
-			return
-		}
-
-		u := getUserByID(b.device.UserID)
+func showConsoleCheckoutDialog(d Device) {
+	userIDs := activeUserIDsOnDevice(d.ID)
+	if len(userIDs) == 0 {
+		return
+	}
+	display := make([]string, 0, len(userIDs))
+	for _, id := range userIDs {
+		u := getUserByID(id)
 		name := "Unknown User"
 		if u != nil {
 			name = u.Name
 		}
-		dialog.ShowConfirm("Confirm Checkout", fmt.Sprintf("Checkout %s from %s %d?", name, b.device.Type, b.device.ID),
-			func(ok bool) {
-				if ok {
-					if err := checkoutUser(b.device.UserID); err != nil {
-						dialog.ShowError(err, mainWindow)
-					}
-				}
-			}, mainWindow)
-	} else {
-		showCheckInDialogShared(b.device.ID, true)
+		display = append(display, fmt.Sprintf("%s (ID: %s)", name, id))
 	}
-}
-
-func (b *DeviceButton) MouseIn(_ *desktop.MouseEvent) {
-	if deviceHoverDetailLabel == nil {
-		return
-	}
-	if b.device.Status != "occupied" {
-		deviceHoverDetailLabel.SetText("")
-		return
-	}
-	if b.device.Type == "Console" {
-		userIDs := activeUserIDsOnDevice(b.device.ID)
-		if len(userIDs) == 0 {
-			deviceHoverDetailLabel.SetText("")
+	selector := widget.NewSelectEntry(display)
+	items := []*widget.FormItem{{Text: "User on " + d.Type, Widget: selector}}
+	dlg := dialog.NewForm("Checkout From "+d.Type, "Check Out", "Cancel", items, func(ok bool) {
+		if !ok {
 			return
 		}
-		lines := []string{}
-		for _, id := range userIDs {
-			u := getUserByID(id)
-			if u != nil {
-				lines = append(lines, fmt.Sprintf("%s (ID: %s) In: %s  |  Usage: %s",
-					u.Name, u.ID, u.CheckInTime.Format("15:04:05 (Jan 02)"), getFormattedUsageDuration(u.CheckInTime)))
+		choice := strings.TrimSpace(selector.Text)
+		if choice == "" {
+			return
+		}
+		var targetID string
+		for i, s := range display {
+			if s == choice {
+				targetID = userIDs[i]
+				break
 			}
 		}
-		deviceHoverDetailLabel.SetText(fmt.Sprintf("%s %d:\n%s", b.device.Type, b.device.ID, strings.Join(lines, "\n")))
-		return
-	}
-	u := getUserByID(b.device.UserID)
-	if u != nil {
-		dev := getDeviceByID(u.PCID)
-		typ := "Unknown Device"
-		if dev != nil {
-			typ = dev.Type
+		if targetID == "" {
+			return
 		}
-		deviceHoverDetailLabel.SetText(fmt.Sprintf("Using %s %d: %s (ID: %s)\nChecked In: %s  |  Usage: %s",
-			typ, u.PCID, u.Name, u.ID, u.CheckInTime.Format("15:04:05 (Jan 02)"), getFormattedUsageDuration(u.CheckInTime)))
-	} else {
-		deviceHoverDetailLabel.SetText(fmt.Sprintf("%s %d: User details not found (UserID: %s).", b.device.Type, b.device.ID, b.device.UserID))
-	}
-}
-
-func (b *DeviceButton) MouseOut() {
-	if deviceHoverDetailLabel != nil {
-		deviceHoverDetailLabel.SetText("")
-	}
-}
-func (b *DeviceButton) Dragged(_ *fyne.DragEvent) {}
-func (b *DeviceButton) DragEnd()                  {}
-func (b *DeviceButton) CreateRenderer() fyne.WidgetRenderer {
-	base := "free.png"
-	if b.device.Type == "Console" {
-		base = "console.png"
-	}
-	imagePath := filepath.Join(imgBaseDir, base)
-	img := canvas.NewImageFromFile(imagePath)
-	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSize(64, 64))
-
-	text := strconv.Itoa(b.device.ID)
-	if b.device.ID == 17 {
-		text = "Xbox " + text
-	}
-	if b.device.ID == 18 {
-		text = "PS4 " + text
-	}
-	lbl := widget.NewLabel(text)
-	lbl.TextStyle = fyne.TextStyle{Bold: true}
-	lbl.Alignment = fyne.TextAlignCenter
-
-	content := container.NewVBox(img, lbl)
-	r := &deviceRenderer{button: b, image: img, label: lbl, objects: []fyne.CanvasObject{content}}
-	r.Refresh()
-	return r
-}
-
-type deviceRenderer struct {
-	button  *DeviceButton
-	image   *canvas.Image
-	label   *widget.Label
-	objects []fyne.CanvasObject
-}
-
-func (r *deviceRenderer) Layout(size fyne.Size)        { r.objects[0].Resize(size) }
-func (r *deviceRenderer) MinSize() fyne.Size           { return r.objects[0].MinSize() }
-func (r *deviceRenderer) Objects() []fyne.CanvasObject { return r.objects }
-func (r *deviceRenderer) Destroy()                     {}
-func (r *deviceRenderer) BackgroundColor() color.Color { return color.Transparent }
-func (r *deviceRenderer) Refresh() {
-	var base string
-	if r.button.device.Status == "free" {
-		if r.button.device.Type == "PC" {
-			base = "free.png"
-		} else {
-			base = "console.png"
+		if err := checkoutUser(targetID); err != nil {
+			dialog.ShowError(err, mainWindow)
 		}
-	} else {
-		if r.button.device.Type == "PC" {
-			base = "busy.png"
-		} else {
-			base = "console_busy.png"
-		}
-	}
-	imagePath := filepath.Join(imgBaseDir, base)
-	r.image.File = imagePath
-	r.image.Refresh()
-
-	text := strconv.Itoa(r.button.device.ID)
-	if r.button.device.ID == 17 {
-		text = "Xbox " + text
-	}
-	if r.button.device.ID == 18 {
-		text = "PS4 " + text
-	}
-	r.label.SetText(text)
-	r.label.Refresh()
-	canvas.Refresh(r.button)
+	}, mainWindow)
+	dlg.Resize(fyne.NewSize(420, dlg.MinSize().Height))
+	dlg.Show()
 }
 
-// Device room (left: devices, right: active users, bottom: queue)
+// ---------- Device room (only layout + bottom queue) ----------
+
 func buildDeviceRoomContent() fyne.CanvasObject {
-	layoutWidget := NewDeviceStatusLayoutWidget()
-	layoutWidget.UpdateDevices()
-
-	if deviceHoverDetailLabel == nil {
-		deviceHoverDetailLabel = widget.NewLabel("")
-		deviceHoverDetailLabel.Wrapping = fyne.TextWrapWord
-		deviceHoverDetailLabel.Alignment = fyne.TextAlignCenter
-	}
-
-	if activeUserNetworkInstance == nil {
-		activeUserNetworkInstance = NewActiveUserNetworkWidget()
-	}
-	activeUserNetworkInstance.UpdateUsers(activeUsers)
-
-	right := container.NewBorder(
-		widget.NewLabelWithStyle("Active Users", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		nil, nil, nil,
-		activeUserNetworkInstance,
-	)
-
-	split := container.NewHSplit(layoutWidget, right)
-	split.Offset = 0.68
+	w := NewDeviceStatusLayoutWidget()
+	w.UpdateDevices()
 
 	checkInInlineForm = buildInlineCheckInForm()
 	checkInInlineForm.Hide()
-
 	queueView := buildPendingQueueView()
 
-	bottom := container.NewVBox(
-		checkInInlineForm,
-		widget.NewSeparator(),
-		queueView,
-	)
-	return container.NewBorder(nil, bottom, nil, nil, split)
+	bottom := container.NewVBox(checkInInlineForm, widget.NewSeparator(), queueView)
+	return container.NewBorder(nil, bottom, nil, nil, w)
 }
 
-// Dialog check-in (still available when clicking free device)
+// ---------- Dialog-based check-in (reused) ----------
+
 func showCheckInDialogShared(deviceID int, fixed bool) {
 	const (
 		dialogWidth             float32 = 460
@@ -1703,9 +1433,6 @@ func showCheckInDialogShared(deviceID int, fixed bool) {
 }
 
 func showCheckInDialog() {
-	if tabs != nil && deviceStatusTabIndex != -1 {
-		tabs.Select(tabs.Items[deviceStatusTabIndex])
-	}
 	if checkInInlineForm != nil {
 		checkInInlineForm.Show()
 		if mainWindow != nil && checkInNameEntry != nil {
@@ -1734,7 +1461,6 @@ func showCheckOutDialog() {
 
 	selector := widget.NewSelectEntry(display)
 	selector.SetPlaceHolder("Select User to Check Out")
-
 	items := []*widget.FormItem{{Text: "User:", Widget: selector}}
 
 	dlg := dialog.NewForm("Check Out User", "Check Out", "Cancel", items, func(ok bool) {
@@ -1766,36 +1492,23 @@ func showCheckOutDialog() {
 	dlg.Show()
 }
 
-// Main
+// ---------- Main ----------
+
 func main() {
 	initData()
 	_ = os.MkdirAll(imgBaseDir, 0o755)
 
-	fapp := app.New()
-	fapp.Settings().SetTheme(NewCatppuccinLatteTheme())
-	mainWindow = fapp.NewWindow("Lounge Management System")
+	app := app.New()
+	app.Settings().SetTheme(NewCatppuccinLatteTheme())
+	mainWindow = app.NewWindow("Lounge Management System")
 	mainWindow.Resize(fyne.NewSize(1080, 720))
-
-	deviceHoverDetailLabel = widget.NewLabel("")
-	deviceHoverDetailLabel.Wrapping = fyne.TextWrapWord
-	deviceHoverDetailLabel.Alignment = fyne.TextAlignCenter
-
-	activeUserNetworkInstance = NewActiveUserNetworkWidget()
 
 	deviceStatus := buildDeviceRoomContent()
 	logView := buildLogView()
 
-	resetLayoutButton := widget.NewButton("Reset Network Layout", func() {
-		if activeUserNetworkInstance != nil {
-			activeUserNetworkInstance.pcPositions = make(map[string]fyne.Position)
-			activeUserNetworkInstance.UpdateUsers(activeUsers)
-		}
-	})
-	resetLayoutButton.Hide()
-
 	checkInButton := widget.NewButtonWithIcon("Check In", theme.ContentAddIcon(), showCheckInDialog)
 	checkOutButton := widget.NewButtonWithIcon("Check Out", theme.ContentRemoveIcon(), showCheckOutDialog)
-	toolbar := container.NewHBox(checkInButton, checkOutButton, layout.NewSpacer(), resetLayoutButton)
+	toolbar := container.NewHBox(checkInButton, checkOutButton, layout.NewSpacer())
 
 	totalDevicesLabel := widget.NewLabel("")
 	activeUsersLabel := widget.NewLabel("")
@@ -1808,24 +1521,13 @@ func main() {
 
 	statusBar := container.NewHBox(totalDevicesLabel, widget.NewLabel(" | "), activeUsersLabel)
 
-	tabs = container.NewAppTabs(
+	tabs := container.NewAppTabs(
 		container.NewTabItem("Device Status", deviceStatus),
 		container.NewTabItem("Log", logView),
 	)
-
-	for i, it := range tabs.Items {
-		switch it.Text {
-		case "Device Status":
-			deviceStatusTabIndex = i
-		case "Log":
-			logTabIndex = i
-		}
-	}
-
 	tabs.SetTabLocation(container.TabLocationTop)
 	tabs.OnSelected = func(it *container.TabItem) {
-		resetLayoutButton.Hide()
-		if it.Text == "Log" && logTabIndex != -1 {
+		if it.Text == "Log" {
 			updateCurrentLogEntriesCache()
 			if logTable != nil {
 				logTable.Refresh()
@@ -1837,33 +1539,22 @@ func main() {
 	top := container.NewVBox(toolbar, widget.NewSeparator())
 	bottom := container.NewVBox(widget.NewSeparator(), statusBar)
 	root := container.NewBorder(top, bottom, nil, nil, tabs)
-
 	mainWindow.SetContent(root)
 
 	go func() {
-		uiTicker := time.NewTicker(time.Second)
 		logTicker := time.NewTicker(5 * time.Minute)
 		lastDate := time.Now().Format("2006-01-02")
-		defer uiTicker.Stop()
 		defer logTicker.Stop()
 
 		for {
 			select {
-			case <-uiTicker.C:
-				fyne.Do(func() {
-					if tabs.Selected() != nil && tabs.Selected().Text == "Device Status" {
-						if activeUserNetworkInstance != nil {
-							activeUserNetworkInstance.Refresh()
-						}
-					}
-				})
 			case <-logTicker.C:
 				fyne.Do(func() {
 					current := time.Now().Format("2006-01-02")
 					if current != lastDate {
 						lastDate = current
-						if tabs.Selected() != nil && tabs.Selected().Text == "Log" && logTable != nil {
-							updateCurrentLogEntriesCache()
+						updateCurrentLogEntriesCache()
+						if logTable != nil {
 							logTable.Refresh()
 						} else {
 							logRefreshPending = true
@@ -1872,23 +1563,9 @@ func main() {
 				})
 			case <-refreshTrigger:
 				fyne.Do(func() {
-					if deviceStatusTabIndex != -1 && tabs != nil && len(tabs.Items) > deviceStatusTabIndex {
-						tabs.Items[deviceStatusTabIndex].Content = buildDeviceRoomContent()
-					}
-					if activeUserNetworkInstance != nil {
-						activeUserNetworkInstance.UpdateUsers(activeUsers)
-					}
 					updateStatus()
-					if logRefreshPending || (tabs.Selected() != nil && tabs.Selected().Text == "Log") {
-						updateCurrentLogEntriesCache()
-						if logTable != nil {
-							logTable.Refresh()
-						}
-						logRefreshPending = false
-					}
-					if tabs != nil {
-						tabs.Refresh()
-					}
+					tabs.Items[0].Content = buildDeviceRoomContent()
+					tabs.Refresh()
 					if mainWindow != nil && mainWindow.Content() != nil {
 						mainWindow.Content().Refresh()
 					}
@@ -1901,7 +1578,7 @@ func main() {
 	mainWindow.ShowAndRun()
 }
 
-// utilities
+// ---------- util ----------
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
