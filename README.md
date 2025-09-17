@@ -2,16 +2,13 @@
 
 A desktop application for managing gaming lounge operations.
 
-![demo](./src/demo.png) 
-![demo](./src/demo_2.png) 
-
 ## Installation
 
 ### Option 1: Using Pre-released Packages
 
 Go to the [Releases](https://github.com/odesaur/lounge/releases) page
 
-### Option 2: Compile from Source (Linux/MacOS)
+### Option 2: Compile from Source (Unix)
 
 #### Build Steps
 
@@ -28,7 +25,7 @@ Go to the [Releases](https://github.com/odesaur/lounge/releases) page
 
 3. Build the application:
    ```bash
-   go build -o GamingLounge
+   go build -o GamingLounge lounge.go theme.go
    ```
 
 4. Run the application:
