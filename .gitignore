@@ -1,3 +1,4 @@
 *.csv
+/fyne-cross/
 /log/
 lounge
