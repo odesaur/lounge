@@ -1278,15 +1278,28 @@ func showConsoleCheckoutDialog(d Device) {
 // ---------- Device room (only layout + bottom queue) ----------
 
 func buildDeviceRoomContent() fyne.CanvasObject {
-	w := NewDeviceStatusLayoutWidget()
-	w.UpdateDevices()
+	// device area (right)
+	layoutWidget := NewDeviceStatusLayoutWidget()
+	layoutWidget.UpdateDevices()
 
-	checkInInlineForm = buildInlineCheckInForm()
-	checkInInlineForm.Hide()
+	// left column: queue check-in + queued icons
+	checkInInlineForm = buildInlineCheckInForm() // keep visible
 	queueView := buildPendingQueueView()
 
-	bottom := container.NewVBox(checkInInlineForm, widget.NewSeparator(), queueView)
-	return container.NewBorder(nil, bottom, nil, nil, w)
+	leftPane := container.NewVBox(
+		checkInInlineForm,
+		widget.NewSeparator(),
+		queueView,
+	)
+	// keep a sensible min width for the left side and allow scrolling if needed
+	leftScroll := container.NewVScroll(container.NewPadded(leftPane))
+	leftScroll.SetMinSize(fyne.NewSize(340, 0))
+
+	// side-by-side: left column (check-in) and right (PC layout)
+	split := container.NewHSplit(leftScroll, layoutWidget)
+	split.Offset = 0.30 // ~30% left column
+
+	return split
 }
 
 // ---------- Dialog-based check-in (reused) ----------
