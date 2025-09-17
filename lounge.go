@@ -81,6 +81,17 @@ var (
 	logTabIndex               int = -1
 	deviceHoverDetailLabel    *widget.Label
 	activeUserNetworkInstance *ActiveUserNetworkWidget
+	pendingList               *widget.List
+	assignmentUserID          string
+	assignmentNoticeLabel     *widget.Label
+	checkInInlineForm         *fyne.Container
+	checkInNameEntry          *widget.Entry
+	checkInIDEntry            *widget.Entry
+	checkInSearchEntry        *widget.Entry
+	checkInResultsList        *widget.List
+	filteredMembersForInline  []Member
+	pendingIconsBox           *fyne.Container
+	raccoonIconResource       fyne.Resource
 )
 
 type classicTheme struct{ fyne.Theme }
@@ -149,6 +160,80 @@ func (themeInstance *classicTheme) Size(name fyne.ThemeSizeName) float32 {
 	default:
 		return themeInstance.Theme.Size(name)
 	}
+}
+
+// PendingUserIcon is a small clickable avatar for a queued user.
+type PendingUserIcon struct {
+	widget.BaseWidget
+	user     User
+	resource fyne.Resource
+	onAssign func(User)
+}
+
+func newPendingUserIcon(user User, resource fyne.Resource, onAssign func(User)) *PendingUserIcon {
+	w := &PendingUserIcon{user: user, resource: resource, onAssign: onAssign}
+	w.ExtendBaseWidget(w)
+	return w
+}
+
+type pendingUserIconRenderer struct {
+	widget  *PendingUserIcon
+	image   *canvas.Image
+	objects []fyne.CanvasObject
+}
+
+func (w *PendingUserIcon) CreateRenderer() fyne.WidgetRenderer {
+	image := canvas.NewImageFromResource(w.resource)
+	image.FillMode = canvas.ImageFillContain
+	iconSize := float32(32)
+	image.SetMinSize(fyne.NewSize(iconSize, iconSize))
+	image.Resize(fyne.NewSize(iconSize, iconSize))
+	center := container.NewCenter(image)
+	return &pendingUserIconRenderer{widget: w, image: image, objects: []fyne.CanvasObject{center}}
+}
+
+func (r *pendingUserIconRenderer) Layout(size fyne.Size)        { r.objects[0].Resize(size) }
+func (r *pendingUserIconRenderer) MinSize() fyne.Size           { return fyne.NewSize(36, 36) }
+func (r *pendingUserIconRenderer) Refresh()                     { r.image.Resource = r.widget.resource; r.image.Refresh() }
+func (r *pendingUserIconRenderer) Objects() []fyne.CanvasObject { return r.objects }
+func (r *pendingUserIconRenderer) Destroy()                     {}
+func (w *PendingUserIcon) Tapped(_ *fyne.PointEvent) {
+	if w.onAssign != nil {
+		w.onAssign(w.user)
+	}
+}
+
+func ensureRaccoonIcon() fyne.Resource {
+	if raccoonIconResource != nil {
+		return raccoonIconResource
+	}
+	path := filepath.Join(imgBaseDir, "raccoon.png")
+	if _, err := os.Stat(path); err == nil {
+		res, _ := fyne.LoadResourceFromPath(path)
+		raccoonIconResource = res
+	} else {
+		raccoonIconResource = theme.ComputerIcon()
+	}
+	return raccoonIconResource
+}
+
+func refreshPendingIcons() {
+	if pendingIconsBox == nil {
+		return
+	}
+	pendingIconsBox.Objects = pendingIconsBox.Objects[:0]
+	iconRes := ensureRaccoonIcon()
+	for _, u := range getPendingUsers() {
+		user := u
+		icon := newPendingUserIcon(user, iconRes, func(sel User) {
+			assignmentUserID = sel.ID
+			if assignmentNoticeLabel != nil {
+				assignmentNoticeLabel.SetText(fmt.Sprintf("Assignment mode: click a free device for %s (%s).", sel.Name, sel.ID))
+			}
+		})
+		pendingIconsBox.Add(icon)
+	}
+	pendingIconsBox.Refresh()
 }
 
 // ActiveUserNetworkWidget renders a vertical, scrollable queue of active users.
@@ -427,76 +512,93 @@ func (w *DeviceStatusLayoutWidget) UpdateDevices() {
 	w.Refresh()
 }
 
-func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
-	for _, d := range allDevices {
-		center := w.positionForDevice(d.ID)
-		size := w.iconSizeForDevice(d.ID)
+// Tapped handles device clicks; if in assignment mode it binds a queued user to the clicked free device.
+func (w *DeviceStatusLayoutWidget) Tapped(event *fyne.PointEvent) {
+	for _, device := range allDevices {
+		center := w.positionForDevice(device.ID)
+		size := w.iconSizeForDevice(device.ID)
 		topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
-		if ev.Position.X >= topLeft.X && ev.Position.X <= topLeft.X+size &&
-			ev.Position.Y >= topLeft.Y && ev.Position.Y <= topLeft.Y+size {
 
-			if d.Status == "occupied" {
-				if d.Type == "Console" {
-					userIDs := activeUserIDsOnDevice(d.ID)
-					if len(userIDs) == 0 {
-						return
-					}
-					display := []string{}
-					for _, id := range userIDs {
-						u := getUserByID(id)
-						name := "Unknown User"
-						if u != nil {
-							name = u.Name
-						}
-						display = append(display, fmt.Sprintf("%s (ID: %s)", name, id))
-					}
-					selector := widget.NewSelectEntry(display)
-					formItems := []*widget.FormItem{{Text: "User on " + d.Type, Widget: selector}}
-					dialogInstance := dialog.NewForm("Checkout From "+d.Type, "Check Out", "Cancel", formItems, func(confirmed bool) {
-						if !confirmed {
-							return
-						}
-						choice := strings.TrimSpace(selector.Text)
-						if choice == "" {
-							return
-						}
-						var targetID string
-						for i, s := range display {
-							if s == choice {
-								targetID = userIDs[i]
-								break
-							}
-						}
-						if targetID == "" {
-							return
-						}
-						if err := checkoutUser(targetID); err != nil {
-							dialog.ShowError(err, mainWindow)
-						}
-					}, mainWindow)
-					dialogInstance.Resize(fyne.NewSize(420, dialogInstance.MinSize().Height))
-					dialogInstance.Show()
+		if event.Position.X < topLeft.X || event.Position.X > topLeft.X+size ||
+			event.Position.Y < topLeft.Y || event.Position.Y > topLeft.Y+size {
+			continue
+		}
+
+		if device.Status == "occupied" {
+			if device.Type == "Console" {
+				userIDs := activeUserIDsOnDevice(device.ID)
+				if len(userIDs) == 0 {
 					return
 				}
-
-				user := getUserByID(d.UserID)
-				userName := "Unknown User"
-				if user != nil {
-					userName = user.Name
+				display := make([]string, 0, len(userIDs))
+				for _, id := range userIDs {
+					user := getUserByID(id)
+					userName := "Unknown User"
+					if user != nil {
+						userName = user.Name
+					}
+					display = append(display, fmt.Sprintf("%s (ID: %s)", userName, id))
 				}
-				dialog.ShowConfirm("Confirm Checkout", fmt.Sprintf("Checkout %s from %s %d?", userName, d.Type, d.ID),
-					func(confirmed bool) {
-						if confirmed {
-							if err := checkoutUser(d.UserID); err != nil {
-								dialog.ShowError(err, mainWindow)
-							}
+				selector := widget.NewSelectEntry(display)
+				formItems := []*widget.FormItem{{Text: "User on " + device.Type, Widget: selector}}
+				dialogInstance := dialog.NewForm("Checkout From "+device.Type, "Check Out", "Cancel", formItems, func(confirmed bool) {
+					if !confirmed {
+						return
+					}
+					choice := strings.TrimSpace(selector.Text)
+					if choice == "" {
+						return
+					}
+					var targetID string
+					for i, s := range display {
+						if s == choice {
+							targetID = userIDs[i]
+							break
 						}
-					}, mainWindow)
-			} else {
-				showCheckInDialogShared(d.ID, true)
+					}
+					if targetID == "" {
+						return
+					}
+					if err := checkoutUser(targetID); err != nil {
+						dialog.ShowError(err, mainWindow)
+					}
+				}, mainWindow)
+				dialogInstance.Resize(fyne.NewSize(420, dialogInstance.MinSize().Height))
+				dialogInstance.Show()
+				return
+			}
+
+			user := getUserByID(device.UserID)
+			userName := "Unknown User"
+			if user != nil {
+				userName = user.Name
+			}
+			dialog.ShowConfirm("Confirm Checkout",
+				fmt.Sprintf("Checkout %s from %s %d?", userName, device.Type, device.ID),
+				func(confirmed bool) {
+					if confirmed {
+						if err := checkoutUser(device.UserID); err != nil {
+							dialog.ShowError(err, mainWindow)
+						}
+					}
+				}, mainWindow)
+			return
+		}
+
+		if assignmentUserID != "" {
+			targetUserID := assignmentUserID
+			assignmentUserID = ""
+			if assignmentNoticeLabel != nil {
+				assignmentNoticeLabel.SetText("")
+			}
+			if err := assignQueuedUserToDevice(targetUserID, device.ID); err != nil {
+				dialog.ShowError(err, mainWindow)
 			}
 			return
 		}
+
+		showCheckInDialogShared(device.ID, true)
+		return
 	}
 }
 
@@ -848,33 +950,189 @@ func buildLogView() fyne.CanvasObject {
 	return container.NewScroll(logTable)
 }
 
+func buildInlineCheckInForm() *fyne.Container {
+	checkInNameEntry = widget.NewEntry()
+	checkInNameEntry.SetPlaceHolder("Full Name")
+
+	checkInIDEntry = widget.NewEntry()
+	checkInIDEntry.SetPlaceHolder("User ID")
+
+	checkInSearchEntry = widget.NewEntry()
+	checkInSearchEntry.SetPlaceHolder("Search Member (Name or ID)")
+
+	filteredMembersForInline = nil
+
+	checkInResultsList = widget.NewList(
+		func() int { return len(filteredMembersForInline) },
+		func() fyne.CanvasObject { return widget.NewLabel("") },
+		func(i widget.ListItemID, o fyne.CanvasObject) {
+			if i >= 0 && i < len(filteredMembersForInline) {
+				member := filteredMembersForInline[i]
+				o.(*widget.Label).SetText(fmt.Sprintf("%s (%s)", member.Name, member.ID))
+			}
+		},
+	)
+
+	resultsScroll := container.NewScroll(checkInResultsList)
+	resultsScroll.SetMinSize(fyne.NewSize(0, 140))
+	resultsScroll.Hide()
+
+	checkInResultsList.OnSelected = func(i widget.ListItemID) {
+		if i < 0 || i >= len(filteredMembersForInline) {
+			return
+		}
+		member := filteredMembersForInline[i]
+		checkInNameEntry.SetText(member.Name)
+		checkInIDEntry.SetText(member.ID)
+		checkInSearchEntry.SetText("")
+		filteredMembersForInline = nil
+		checkInResultsList.UnselectAll()
+		checkInResultsList.Refresh()
+		resultsScroll.Hide()
+		if mainWindow != nil {
+			mainWindow.Canvas().Focus(checkInIDEntry)
+		}
+	}
+
+	checkInSearchEntry.OnChanged = func(query string) {
+		query = strings.ToLower(strings.TrimSpace(query))
+		if len(members) == 0 {
+			loadMembers()
+		}
+		if query == "" {
+			filteredMembersForInline = nil
+			checkInResultsList.Refresh()
+			resultsScroll.Hide()
+			return
+		}
+		matches := make([]Member, 0, 20)
+		for _, m := range members {
+			name := strings.ToLower(strings.TrimSpace(m.Name))
+			id := strings.ToLower(strings.TrimSpace(m.ID))
+			if strings.Contains(name, query) || strings.Contains(id, query) {
+				matches = append(matches, m)
+			}
+		}
+		filteredMembersForInline = matches
+		checkInResultsList.Refresh()
+		if len(matches) > 0 {
+			resultsScroll.Show()
+		} else {
+			resultsScroll.Hide()
+		}
+	}
+
+	noIDButton := widget.NewButton("No ID?", func() {
+		checkInIDEntry.SetText("LOUNGE-" + getNextMemberID())
+	})
+
+	addButton := widget.NewButton("Add to Queue", func() {
+		name := strings.TrimSpace(checkInNameEntry.Text)
+		id := strings.TrimSpace(checkInIDEntry.Text)
+		if name == "" || id == "" {
+			dialog.ShowError(fmt.Errorf("name and ID are required"), mainWindow)
+			return
+		}
+		if err := registerUser(name, id, 0); err != nil {
+			dialog.ShowError(err, mainWindow)
+			return
+		}
+		checkInNameEntry.SetText("")
+		checkInIDEntry.SetText("")
+		if pendingIconsBox != nil {
+			refreshPendingIcons()
+		}
+	})
+
+	hideButton := widget.NewButton("Hide", func() {
+		if checkInInlineForm != nil {
+			checkInInlineForm.Hide()
+		}
+	})
+
+	idRow := container.NewBorder(nil, nil, nil, noIDButton, checkInIDEntry)
+
+	form := widget.NewForm(
+		widget.NewFormItem("Name", checkInNameEntry),
+		widget.NewFormItem("ID", idRow),
+	)
+
+	header := widget.NewLabelWithStyle("Queue Check-In", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	bar := container.NewBorder(nil, nil, nil, hideButton, header)
+	actions := container.NewHBox(addButton, layout.NewSpacer())
+
+	card := container.NewVBox(
+		bar,
+		checkInSearchEntry,
+		resultsScroll,
+		form,
+		actions,
+	)
+	return container.NewPadded(card)
+}
+
+func buildPendingQueueView() fyne.CanvasObject {
+	assignmentNoticeLabel = widget.NewLabel("")
+	pendingIconsBox = container.NewHBox()
+	refreshPendingIcons()
+
+	header := widget.NewLabelWithStyle("Queued Check-Ins", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	scroll := container.NewHScroll(pendingIconsBox)
+	scroll.SetMinSize(fyne.NewSize(0, 48))
+
+	return container.NewVBox(header, assignmentNoticeLabel, scroll)
+}
+
 func loadMembers() {
-	memberCsvFile, err := os.Open(memberFile)
+	memberFileHandle, err := os.Open(memberFile)
 	if err != nil {
 		members = nil
 		return
 	}
-	defer memberCsvFile.Close()
+	defer memberFileHandle.Close()
 
-	csvReader := csv.NewReader(memberCsvFile)
-	rows, _ := csvReader.ReadAll()
-
-	start := 0
-	if len(rows) > 0 && strings.EqualFold(rows[0][1], "email address") {
-		start = 1
+	reader := csv.NewReader(memberFileHandle)
+	reader.FieldsPerRecord = -1
+	rows, err := reader.ReadAll()
+	if err != nil || len(rows) == 0 {
+		members = nil
+		return
 	}
 
-	members = nil
-	for _, row := range rows[start:] {
-		if len(row) >= 5 {
-			members = append(members, Member{
-				Email:         row[1],
-				Name:          row[2],
-				StudentNumber: row[3],
-				PhoneNumber:   row[4],
-				ID:            row[3],
-			})
+	nameIndex, idIndex := -1, -1
+	header := rows[0]
+	for i := range header {
+		key := strings.ToLower(strings.TrimSpace(header[i]))
+		if key == "student name" || key == "name" {
+			nameIndex = i
 		}
+		if key == "student number" || key == "id" || key == "student id" {
+			idIndex = i
+		}
+	}
+
+	startRow := 0
+	if nameIndex != -1 && idIndex != -1 {
+		startRow = 1
+	} else {
+		nameIndex, idIndex = 2, 3
+	}
+
+	members = members[:0]
+	for _, row := range rows[startRow:] {
+		if nameIndex >= len(row) || idIndex >= len(row) {
+			continue
+		}
+		name := strings.TrimSpace(row[nameIndex])
+		id := strings.TrimSpace(row[idIndex])
+		if name == "" || id == "" {
+			continue
+		}
+		members = append(members, Member{
+			Name:          name,
+			ID:            id,
+			StudentNumber: id,
+		})
 	}
 }
 
@@ -1027,24 +1285,27 @@ func activeUserIDsOnDevice(deviceID int) []string {
 	return ids
 }
 
+// registerUser supports pending check-ins when deviceID == 0.
 func registerUser(name, userID string, deviceID int) error {
 	if getUserByID(userID) != nil {
 		existingUser := getUserByID(userID)
 		return fmt.Errorf("user ID %s (%s) already checked in on Device %d", userID, existingUser.Name, existingUser.PCID)
 	}
-	device := getDeviceByID(deviceID)
-	if device == nil {
-		return fmt.Errorf("device ID %d does not exist", deviceID)
-	}
 
-	if device.Type == "PC" {
-		if device.Status != "free" {
-			return fmt.Errorf("device %d is busy (occupied by UserID: %s)", deviceID, device.UserID)
+	if deviceID != 0 {
+		device := getDeviceByID(deviceID)
+		if device == nil {
+			return fmt.Errorf("device ID %d does not exist", deviceID)
 		}
-		device.Status = "occupied"
-		device.UserID = userID
-	} else {
-		device.Status = "occupied"
+		if device.Type == "PC" {
+			if device.Status != "free" {
+				return fmt.Errorf("device %d is busy (occupied by UserID: %s)", deviceID, device.UserID)
+			}
+			device.Status = "occupied"
+			device.UserID = userID
+		} else {
+			device.Status = "occupied"
+		}
 	}
 
 	newUser := User{ID: userID, Name: name, CheckInTime: time.Now(), PCID: deviceID}
@@ -1104,6 +1365,60 @@ func checkoutUser(userID string) error {
 	go recordLogEvent(false, *userToCheckout, loggedDeviceID, &originalCheckInTime)
 	refreshTrigger <- true
 	return nil
+}
+
+// users checked in with PCID==0 are pending; this assigns them to a device.
+func assignQueuedUserToDevice(userID string, deviceID int) error {
+	user := getUserByID(userID)
+	if user == nil {
+		return fmt.Errorf("user ID %s not found", userID)
+	}
+	if user.PCID != 0 {
+		return fmt.Errorf("user %s already on device %d", userID, user.PCID)
+	}
+	device := getDeviceByID(deviceID)
+	if device == nil {
+		return fmt.Errorf("device ID %d does not exist", deviceID)
+	}
+	if device.Status != "free" {
+		return fmt.Errorf("device %d is busy", deviceID)
+	}
+	device.Status = "occupied"
+	if device.Type == "PC" {
+		device.UserID = userID
+	}
+
+	originalCheckInTime := user.CheckInTime
+	user.PCID = deviceID
+	saveData()
+
+	logFileMutex.Lock()
+	entries, err := readDailyLogEntries()
+	if err == nil {
+		for i := len(entries) - 1; i >= 0; i-- {
+			if entries[i].UserID == userID && entries[i].CheckOutTime.IsZero() &&
+				entries[i].PCID == 0 && entries[i].CheckInTime.Equal(originalCheckInTime) {
+				entries[i].PCID = deviceID
+				break
+			}
+		}
+		_ = writeDailyLogEntries(entries)
+		currentLogEntries = entries
+	}
+	logFileMutex.Unlock()
+
+	refreshTrigger <- true
+	return nil
+}
+
+func getPendingUsers() []User {
+	list := []User{}
+	for _, u := range activeUsers {
+		if u.PCID == 0 {
+			list = append(list, u)
+		}
+	}
+	return list
 }
 
 func getFormattedUsageDuration(startTime time.Time) string {
@@ -1320,7 +1635,6 @@ func buildDeviceRoomContent() fyne.CanvasObject {
 		deviceHoverDetailLabel.Alignment = fyne.TextAlignCenter
 	}
 
-	// right side = the same network widget used previously in "Active Users" tab
 	if activeUserNetworkInstance == nil {
 		activeUserNetworkInstance = NewActiveUserNetworkWidget()
 	}
@@ -1333,9 +1647,19 @@ func buildDeviceRoomContent() fyne.CanvasObject {
 	)
 
 	split := container.NewHSplit(layoutWidget, right)
-	split.Offset = 0.68 // left/right ratio; tweak to taste
+	split.Offset = 0.68
 
-	return container.NewBorder(nil, deviceHoverDetailLabel, nil, nil, split)
+	checkInInlineForm = buildInlineCheckInForm()
+	checkInInlineForm.Hide()
+
+	queueView := buildPendingQueueView()
+
+	bottom := container.NewVBox(
+		checkInInlineForm,
+		widget.NewSeparator(),
+		queueView,
+	)
+	return container.NewBorder(nil, bottom, nil, nil, split)
 }
 
 func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
@@ -1480,7 +1804,17 @@ func showCheckInDialogShared(deviceID int, deviceIDIsFixed bool) {
 	dialogReference.Show()
 }
 
-func showCheckInDialog() { showCheckInDialogShared(0, false) }
+func showCheckInDialog() {
+	if tabs != nil && deviceStatusTabIndex != -1 {
+		tabs.Select(tabs.Items[deviceStatusTabIndex])
+	}
+	if checkInInlineForm != nil {
+		checkInInlineForm.Show()
+		if mainWindow != nil && checkInNameEntry != nil {
+			mainWindow.Canvas().Focus(checkInNameEntry)
+		}
+	}
+}
 
 func showCheckOutDialog() {
 	if len(activeUsers) == 0 {
