@@ -340,7 +340,11 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 		}
 
 		if d.Type == "Console" {
-			showCheckInDialogShared(d.ID, true)
+			if d.Status == "occupied" {
+				showConsoleCheckoutDialog(d)
+			} else {
+				showCheckInDialogShared(d.ID, true)
+			}
 			return
 		}
 
