@@ -123,10 +123,27 @@ func (r *pendingUserIconRenderer) MinSize() fyne.Size           { return fyne.Ne
 func (r *pendingUserIconRenderer) Refresh()                     { r.image.Resource = r.widget.resource; r.image.Refresh() }
 func (r *pendingUserIconRenderer) Objects() []fyne.CanvasObject { return r.objects }
 func (r *pendingUserIconRenderer) Destroy()                     {}
+
 func (w *PendingUserIcon) Tapped(_ *fyne.PointEvent) {
-	if w.onAssign != nil {
-		w.onAssign(w.user)
-	}
+	d := dialog.NewCustomConfirm(
+		fmt.Sprintf("Queued: %s (%s)", w.user.Name, w.user.ID),
+		"Assign",
+		"Remove",
+		widget.NewLabel("Choose an action for this queued user."),
+		func(assign bool) {
+			if assign {
+				if w.onAssign != nil {
+					w.onAssign(w.user)
+				}
+			} else {
+				if err := removeQueuedUser(w.user.ID); err != nil {
+					dialog.ShowError(err, mainWindow)
+				}
+			}
+		},
+		mainWindow,
+	)
+	d.Show()
 }
 
 func ensureRaccoonIcon() fyne.Resource {
@@ -299,7 +316,6 @@ func (w *DeviceStatusLayoutWidget) computeSlots() {
 
 func (w *DeviceStatusLayoutWidget) UpdateDevices() { w.ensureMapping(); w.Refresh() }
 
-// Left-click behavior lives in Tapped; console right-click handled in MouseDown.
 func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 	for _, d := range allDevices {
 		center := w.positionForDevice(d.ID)
@@ -311,13 +327,23 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 			continue
 		}
 
-		// Consoles: left-click always adds another user
+		if assignmentUserID != "" {
+			target := assignmentUserID
+			assignmentUserID = ""
+			if assignmentNoticeLabel != nil {
+				assignmentNoticeLabel.SetText("")
+			}
+			if err := assignQueuedUserToDevice(target, d.ID); err != nil {
+				dialog.ShowError(err, mainWindow)
+			}
+			return
+		}
+
 		if d.Type == "Console" {
 			showCheckInDialogShared(d.ID, true)
 			return
 		}
 
-		// PCs
 		if d.Status == "occupied" {
 			u := getUserByID(d.UserID)
 			name := "Unknown User"
@@ -332,19 +358,6 @@ func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
 						}
 					}
 				}, mainWindow)
-			return
-		}
-
-		// assignment from queue?
-		if assignmentUserID != "" {
-			target := assignmentUserID
-			assignmentUserID = ""
-			if assignmentNoticeLabel != nil {
-				assignmentNoticeLabel.SetText("")
-			}
-			if err := assignQueuedUserToDevice(target, d.ID); err != nil {
-				dialog.ShowError(err, mainWindow)
-			}
 			return
 		}
 
@@ -1178,6 +1191,32 @@ func checkoutUser(userID string) error {
 	return nil
 }
 
+func removeQueuedUser(userID string) error {
+	u := getUserByID(userID)
+	if u == nil {
+		return fmt.Errorf("user ID %s not found", userID)
+	}
+	if u.PCID != 0 {
+		return fmt.Errorf("user %s is assigned to device %d", userID, u.PCID)
+	}
+	idx := -1
+	for i := range activeUsers {
+		if activeUsers[i].ID == userID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("user %s consistency error", userID)
+	}
+	original := u.CheckInTime
+	activeUsers = append(activeUsers[:idx], activeUsers[idx+1:]...)
+	saveData()
+	go recordLogEvent(false, *u, 0, &original)
+	refreshTrigger <- true
+	return nil
+}
+
 func assignQueuedUserToDevice(userID string, deviceID int) error {
 	u := getUserByID(userID)
 	if u == nil {
@@ -1190,14 +1229,13 @@ func assignQueuedUserToDevice(userID string, deviceID int) error {
 	if d == nil {
 		return fmt.Errorf("device ID %d does not exist", deviceID)
 	}
-	if d.Status != "free" {
+	if d.Type == "PC" && d.Status != "free" {
 		return fmt.Errorf("device %d is busy", deviceID)
 	}
 	d.Status = "occupied"
 	if d.Type == "PC" {
 		d.UserID = userID
 	}
-
 	original := u.CheckInTime
 	u.PCID = deviceID
 	saveData()
