@@ -85,6 +85,8 @@ var (
 	filteredMembersForInline []Member
 	pendingIconsBox          *fyne.Container
 	raccoonIconResource      fyne.Resource
+	deviceLayoutWidget       *DeviceStatusLayoutWidget
+	layoutLocked             = true
 )
 
 type PendingUserIcon struct {
@@ -186,6 +188,7 @@ type DeviceStatusLayoutWidget struct {
 	dragOffset       fyne.Position
 	isDragging       bool
 	transientDragPos fyne.Position
+	layoutLocked     bool
 
 	pcIconSize      float32
 	consoleIconSize float32
@@ -392,6 +395,13 @@ func (layoutWidget *DeviceStatusLayoutWidget) UpdateDevices() {
 	layoutWidget.Refresh()
 }
 
+func (layoutWidget *DeviceStatusLayoutWidget) SetLayoutLocked(locked bool) {
+	layoutWidget.layoutLocked = locked
+	layoutWidget.isDragging = false
+	layoutWidget.draggingDeviceID = 0
+	layoutWidget.Refresh()
+}
+
 func (layoutWidget *DeviceStatusLayoutWidget) Tapped(tapEvent *fyne.PointEvent) {
 	for _, device := range allDevices {
 		center := layoutWidget.positionForDevice(device.ID)
@@ -509,7 +519,9 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 			newY = maxY
 		}
 		layoutWidget.transientDragPos = fyne.NewPos(newX, newY)
-		layoutWidget.Refresh()
+		if !layoutWidget.layoutLocked {
+			layoutWidget.Refresh()
+		}
 	}
 }
 
@@ -517,6 +529,13 @@ func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	if !layoutWidget.isDragging || layoutWidget.draggingDeviceID == 0 {
 		layoutWidget.isDragging = false
 		layoutWidget.draggingDeviceID = 0
+		return
+	}
+	if layoutWidget.layoutLocked {
+		layoutWidget.handleLockedDrop()
+		layoutWidget.isDragging = false
+		layoutWidget.draggingDeviceID = 0
+		layoutWidget.Refresh()
 		return
 	}
 	targetSlot := layoutWidget.nearestSlot(layoutWidget.transientDragPos)
@@ -542,9 +561,23 @@ func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	layoutWidget.Refresh()
 }
 
+func (layoutWidget *DeviceStatusLayoutWidget) handleLockedDrop() {
+	sourceDevice := getDeviceByID(layoutWidget.draggingDeviceID)
+	if sourceDevice == nil || sourceDevice.Type != "PC" || sourceDevice.Status != "occupied" || sourceDevice.UserID == "" {
+		return
+	}
+	targetDevice := layoutWidget.deviceAtPosition(layoutWidget.transientDragPos)
+	if targetDevice == nil || targetDevice.Type != "PC" || targetDevice.Status != "free" {
+		return
+	}
+	if err := switchUserDevice(sourceDevice.UserID, targetDevice.ID); err != nil {
+		dialog.ShowError(err, mainWindow)
+	}
+}
+
 func (layoutWidget *DeviceStatusLayoutWidget) positionForDevice(deviceID int) fyne.Position {
 	layoutWidget.ensureMapping()
-	if layoutWidget.isDragging && layoutWidget.draggingDeviceID == deviceID {
+	if layoutWidget.isDragging && !layoutWidget.layoutLocked && layoutWidget.draggingDeviceID == deviceID {
 		return layoutWidget.transientDragPos
 	}
 	slot := layoutWidget.deviceToSlot[deviceID]
@@ -562,6 +595,20 @@ func (layoutWidget *DeviceStatusLayoutWidget) iconSizeForDevice(deviceID int) fl
 		return layoutWidget.consoleIconSize
 	}
 	return layoutWidget.pcIconSize
+}
+
+func (layoutWidget *DeviceStatusLayoutWidget) deviceAtPosition(pos fyne.Position) *Device {
+	for i := range allDevices {
+		device := &allDevices[i]
+		center := layoutWidget.positionForDevice(device.ID)
+		size := layoutWidget.iconSizeForDevice(device.ID)
+		topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
+		if pos.X >= topLeft.X && pos.X <= topLeft.X+size &&
+			pos.Y >= topLeft.Y && pos.Y <= topLeft.Y+size {
+			return device
+		}
+	}
+	return nil
 }
 
 type deviceVisual struct {
@@ -977,6 +1024,27 @@ func (l *twoPaneLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(width, height)
 }
 
+func decorateCard(content fyne.CanvasObject) fyne.CanvasObject {
+	background := canvas.NewRectangle(color.NRGBA{R: 245, G: 246, B: 252, A: 255})
+	background.SetMinSize(content.MinSize().Add(fyne.NewSize(32, 32)))
+	card := container.NewPadded(content)
+	return container.NewMax(background, card)
+}
+
+func updateLayoutLockButton(btn *widget.Button) {
+	if btn == nil {
+		return
+	}
+	if layoutLocked {
+		btn.SetText("Unlock Layout")
+		btn.SetIcon(theme.VisibilityIcon())
+	} else {
+		btn.SetText("Lock Layout")
+		btn.SetIcon(theme.VisibilityOffIcon())
+	}
+	btn.Refresh()
+}
+
 func buildInlineCheckInForm() *fyne.Container {
 	checkInNameEntry = widget.NewEntry()
 	checkInNameEntry.SetPlaceHolder("Full Name")
@@ -1068,11 +1136,7 @@ func buildInlineCheckInForm() *fyne.Container {
 			refreshPendingIcons()
 		}
 	})
-	hideButton := widget.NewButton("Hide", func() {
-		if checkInInlineForm != nil {
-			checkInInlineForm.Hide()
-		}
-	})
+	hideButton := widget.NewButton("Hide", func() {})
 
 	idRow := container.NewBorder(nil, nil, nil, noIDButton, checkInIDEntry)
 
@@ -1083,7 +1147,24 @@ func buildInlineCheckInForm() *fyne.Container {
 
 	header := widget.NewLabelWithStyle("Queue Check-In", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	bar := container.NewBorder(nil, nil, nil, hideButton, header)
-	card := container.NewVBox(bar, checkInSearchEntry, resultsScroll, form, addButton)
+	body := container.NewVBox(
+		checkInSearchEntry,
+		resultsScroll,
+		form,
+		container.NewHBox(layout.NewSpacer(), addButton),
+	)
+	hideButton.OnTapped = func() {
+		if body.Hidden {
+			body.Show()
+			hideButton.SetText("Hide")
+			hideButton.Refresh()
+		} else {
+			body.Hide()
+			hideButton.SetText("Show")
+			hideButton.Refresh()
+		}
+	}
+	card := container.NewVBox(bar, widget.NewSeparator(), body)
 
 	wrapper := container.New(&leftRatioLayout{ratio: 0.25, minW: 360, maxW: 560}, container.NewPadded(card))
 	return wrapper
@@ -1419,6 +1500,64 @@ func assignQueuedUserToDevice(userID string, deviceID int) error {
 	return nil
 }
 
+func switchUserDevice(userID string, targetDeviceID int) error {
+	user := getUserByID(userID)
+	if user == nil {
+		return fmt.Errorf("user %s not found", userID)
+	}
+	if user.PCID == targetDeviceID {
+		return fmt.Errorf("user %s is already on device %d", userID, targetDeviceID)
+	}
+	target := getDeviceByID(targetDeviceID)
+	if target == nil {
+		return fmt.Errorf("device %d does not exist", targetDeviceID)
+	}
+	if target.Status != "free" {
+		return fmt.Errorf("device %d is not available", targetDeviceID)
+	}
+
+	originalDeviceID := user.PCID
+	original := getDeviceByID(originalDeviceID)
+
+	user.PCID = targetDeviceID
+
+	if original != nil {
+		if original.Type == "PC" {
+			original.Status = "free"
+			original.UserID = ""
+		} else {
+			if len(activeUserIDsOnDevice(original.ID)) == 0 {
+				original.Status = "free"
+			}
+		}
+	}
+
+	if target.Type == "PC" {
+		target.Status = "occupied"
+		target.UserID = user.ID
+	} else {
+		target.Status = "occupied"
+	}
+
+	saveData()
+
+	logFileMutex.Lock()
+	if entries, err := readDailyLogEntries(); err == nil {
+		for i := len(entries) - 1; i >= 0; i-- {
+			if entries[i].UserID == userID && entries[i].CheckOutTime.IsZero() {
+				entries[i].PCID = targetDeviceID
+				break
+			}
+		}
+		_ = writeDailyLogEntries(entries)
+		currentLogEntries = entries
+	}
+	logFileMutex.Unlock()
+
+	refreshTrigger <- true
+	return nil
+}
+
 func getPendingUsers() []User {
 	out := []User{}
 	for _, u := range activeUsers {
@@ -1473,7 +1612,9 @@ func showConsoleCheckoutDialog(d Device) {
 
 func buildDeviceRoomContent() fyne.CanvasObject {
 	layoutWidget := NewDeviceStatusLayoutWidget()
+	layoutWidget.SetLayoutLocked(layoutLocked)
 	layoutWidget.UpdateDevices()
+	deviceLayoutWidget = layoutWidget
 
 	checkInInlineForm = buildInlineCheckInForm()
 	queueView := buildPendingQueueView()
@@ -1681,6 +1822,90 @@ func showCheckOutDialog() {
 	dlg.Show()
 }
 
+func showSwitchStationDialog() {
+	if len(activeUsers) == 0 {
+		dialog.ShowInformation("Switch Station", "No active users to move.", mainWindow)
+		return
+	}
+	freeDevices := []Device{}
+	for _, d := range allDevices {
+		if d.Status == "free" {
+			freeDevices = append(freeDevices, d)
+		}
+	}
+	if len(freeDevices) == 0 {
+		dialog.ShowInformation("Switch Station", "No available stations.", mainWindow)
+		return
+	}
+
+	userLabels := make([]string, len(activeUsers))
+	userIDs := make([]string, len(activeUsers))
+	for i, u := range activeUsers {
+		name := u.Name
+		if len(name) > 25 {
+			name = name[:22] + "..."
+		}
+		userLabels[i] = fmt.Sprintf("%s (Current: %d)", name, u.PCID)
+		userIDs[i] = u.ID
+	}
+	deviceLabels := make([]string, len(freeDevices))
+	deviceIDs := make([]int, len(freeDevices))
+	for i, d := range freeDevices {
+		deviceLabels[i] = fmt.Sprintf("%s %d", d.Type, d.ID)
+		deviceIDs[i] = d.ID
+	}
+
+	userSelector := widget.NewSelectEntry(userLabels)
+	userSelector.SetPlaceHolder("Select user")
+	deviceSelector := widget.NewSelectEntry(deviceLabels)
+	deviceSelector.SetPlaceHolder("Select available station")
+
+	items := []*widget.FormItem{
+		{Text: "User", Widget: userSelector},
+		{Text: "Target Station", Widget: deviceSelector},
+	}
+
+	dlg := dialog.NewForm("Switch Station", "Switch", "Cancel", items, func(ok bool) {
+		if !ok {
+			return
+		}
+		userChoice := strings.TrimSpace(userSelector.Text)
+		deviceChoice := strings.TrimSpace(deviceSelector.Text)
+		if userChoice == "" || deviceChoice == "" {
+			dialog.ShowError(fmt.Errorf("select a user and a station"), mainWindow)
+			return
+		}
+		var userID string
+		for i, label := range userLabels {
+			if label == userChoice {
+				userID = userIDs[i]
+				break
+			}
+		}
+		if userID == "" {
+			dialog.ShowError(fmt.Errorf("invalid user selection"), mainWindow)
+			return
+		}
+		var deviceID int
+		for i, label := range deviceLabels {
+			if label == deviceChoice {
+				deviceID = deviceIDs[i]
+				break
+			}
+		}
+		if deviceID == 0 {
+			dialog.ShowError(fmt.Errorf("invalid station selection"), mainWindow)
+			return
+		}
+		if err := switchUserDevice(userID, deviceID); err != nil {
+			dialog.ShowError(err, mainWindow)
+			return
+		}
+	}, mainWindow)
+	dlg.Resize(fyne.NewSize(460, dlg.MinSize().Height))
+	dlg.Show()
+}
+
 func main() {
 	initData()
 	_ = os.MkdirAll(imgBaseDir, 0o755)
@@ -1695,7 +1920,17 @@ func main() {
 
 	checkInButton := widget.NewButtonWithIcon("Check In", theme.ContentAddIcon(), showCheckInDialog)
 	checkOutButton := widget.NewButtonWithIcon("Check Out", theme.ContentRemoveIcon(), showCheckOutDialog)
-	toolbar := container.NewHBox(checkInButton, checkOutButton, layout.NewSpacer())
+	switchButton := widget.NewButtonWithIcon("Switch Station", theme.ViewRefreshIcon(), showSwitchStationDialog)
+	var lockButton *widget.Button
+	lockButton = widget.NewButton("", func() {
+		layoutLocked = !layoutLocked
+		if deviceLayoutWidget != nil {
+			deviceLayoutWidget.SetLayoutLocked(layoutLocked)
+		}
+		updateLayoutLockButton(lockButton)
+	})
+	updateLayoutLockButton(lockButton)
+	toolbar := container.NewHBox(checkInButton, checkOutButton, switchButton, lockButton, layout.NewSpacer())
 
 	totalDevicesLabel := widget.NewLabel("")
 	activeUsersLabel := widget.NewLabel("")
