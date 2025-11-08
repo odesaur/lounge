@@ -87,6 +87,8 @@ var (
 	raccoonIconResource      fyne.Resource
 	deviceLayoutWidget       *DeviceStatusLayoutWidget
 	layoutLocked             = true
+	dragIndicator            *canvas.Image
+	dragIndicatorVisible     bool
 )
 
 type PendingUserIcon struct {
@@ -189,6 +191,7 @@ type DeviceStatusLayoutWidget struct {
 	isDragging       bool
 	transientDragPos fyne.Position
 	layoutLocked     bool
+	swapDragActive   bool
 
 	pcIconSize      float32
 	consoleIconSize float32
@@ -491,10 +494,17 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 			topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
 			if dragEvent.Position.X >= topLeft.X && dragEvent.Position.X <= topLeft.X+size &&
 				dragEvent.Position.Y >= topLeft.Y && dragEvent.Position.Y <= topLeft.Y+size {
+				if layoutWidget.layoutLocked && (device.Type != "PC" || device.Status != "occupied") {
+					continue
+				}
 				layoutWidget.isDragging = true
 				layoutWidget.draggingDeviceID = device.ID
 				layoutWidget.dragOffset = fyne.NewPos(dragEvent.Position.X-center.X, dragEvent.Position.Y-center.Y)
 				layoutWidget.transientDragPos = center
+				layoutWidget.swapDragActive = layoutWidget.layoutLocked && device.Type == "PC" && device.Status == "occupied"
+				if layoutWidget.swapDragActive {
+					layoutWidget.updateDragIndicator(dragEvent.AbsolutePosition, true)
+				}
 				break
 			}
 		}
@@ -519,7 +529,9 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 			newY = maxY
 		}
 		layoutWidget.transientDragPos = fyne.NewPos(newX, newY)
-		if !layoutWidget.layoutLocked {
+		if layoutWidget.layoutLocked && layoutWidget.swapDragActive {
+			layoutWidget.updateDragIndicator(dragEvent.AbsolutePosition, true)
+		} else {
 			layoutWidget.Refresh()
 		}
 	}
@@ -527,14 +539,22 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 
 func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	if !layoutWidget.isDragging || layoutWidget.draggingDeviceID == 0 {
+		if layoutWidget.swapDragActive {
+			layoutWidget.updateDragIndicator(fyne.NewPos(0, 0), false)
+		}
 		layoutWidget.isDragging = false
 		layoutWidget.draggingDeviceID = 0
+		layoutWidget.swapDragActive = false
 		return
 	}
 	if layoutWidget.layoutLocked {
 		layoutWidget.handleLockedDrop()
+		if layoutWidget.swapDragActive {
+			layoutWidget.updateDragIndicator(fyne.NewPos(0, 0), false)
+		}
 		layoutWidget.isDragging = false
 		layoutWidget.draggingDeviceID = 0
+		layoutWidget.swapDragActive = false
 		layoutWidget.Refresh()
 		return
 	}
@@ -558,7 +578,11 @@ func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	}
 	layoutWidget.isDragging = false
 	layoutWidget.draggingDeviceID = 0
+	if layoutWidget.swapDragActive {
+		layoutWidget.updateDragIndicator(fyne.NewPos(0, 0), false)
+	}
 	layoutWidget.Refresh()
+	layoutWidget.swapDragActive = false
 }
 
 func (layoutWidget *DeviceStatusLayoutWidget) handleLockedDrop() {
@@ -609,6 +633,31 @@ func (layoutWidget *DeviceStatusLayoutWidget) deviceAtPosition(pos fyne.Position
 		}
 	}
 	return nil
+}
+
+func (layoutWidget *DeviceStatusLayoutWidget) updateDragIndicator(pos fyne.Position, active bool) {
+	if mainWindow == nil {
+		return
+	}
+	canvasObj := mainWindow.Canvas()
+	if active {
+		if dragIndicator == nil {
+			img := canvas.NewImageFromResource(theme.MailComposeIcon())
+			img.SetMinSize(fyne.NewSize(28, 28))
+			img.Resize(fyne.NewSize(28, 28))
+			dragIndicator = img
+		}
+		dragIndicator.Move(fyne.NewPos(pos.X+12, pos.Y+12))
+		if !dragIndicatorVisible {
+			canvasObj.Overlays().Add(dragIndicator)
+			dragIndicatorVisible = true
+		}
+		dragIndicator.Show()
+		dragIndicator.Refresh()
+	} else if dragIndicatorVisible {
+		canvasObj.Overlays().Remove(dragIndicator)
+		dragIndicatorVisible = false
+	}
 }
 
 type deviceVisual struct {
