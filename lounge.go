@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ const (
 	memberFile       = "membership.csv"
 	logDir           = "log"
 	imgBaseDir       = "src"
+	queueFile        = "log/queue.json"
 )
 
 type User struct {
@@ -69,7 +71,8 @@ var (
 	activeUsers       []User
 	members           []Member
 	mainWindow        fyne.Window
-	logTable          *widget.Table
+	logList           *widget.List
+	logDateSelect     *widget.Select
 	refreshTrigger    = make(chan bool, 1)
 	logRefreshPending = false
 	logFileMutex      sync.Mutex
@@ -89,13 +92,27 @@ var (
 	layoutLocked             = true
 	dragIndicator            *canvas.Image
 	dragIndicatorVisible     bool
+	logTabActive             bool
+	selectedLogDate          string
+	pendingDragUserID        string
+	pendingDragActive        bool
+	pendingDragLastPos       fyne.Position
+	queuedEntries            []queueEntry
+	pendingIconWidgets       []*PendingUserIcon
 )
+
+type queueEntry struct {
+	UserID     string    `json:"user_id"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
+}
 
 type PendingUserIcon struct {
 	widget.BaseWidget
 	user     User
 	resource fyne.Resource
 	onAssign func(User)
+	label    string
+	subLabel string
 }
 
 func newPendingUserIcon(u User, res fyne.Resource, onAssign func(User)) *PendingUserIcon {
@@ -104,55 +121,115 @@ func newPendingUserIcon(u User, res fyne.Resource, onAssign func(User)) *Pending
 	return w
 }
 
+func (w *PendingUserIcon) SetLabel(text string) {
+	w.label = text
+	w.Refresh()
+}
+
+func (w *PendingUserIcon) SetLabels(primary, secondary string) {
+	w.label = primary
+	w.subLabel = secondary
+	w.Refresh()
+}
+
+func truncateLabel(text string, maxChars int) string {
+	text = strings.TrimSpace(text)
+	if len([]rune(text)) <= maxChars {
+		return text
+	}
+	runes := []rune(text)
+	return string(runes[:maxChars-1]) + "…"
+}
+
 type pendingUserIconRenderer struct {
 	widget  *PendingUserIcon
 	image   *canvas.Image
+	label   *canvas.Text
+	sub     *canvas.Text
 	objects []fyne.CanvasObject
 }
 
 func (w *PendingUserIcon) CreateRenderer() fyne.WidgetRenderer {
 	img := canvas.NewImageFromResource(w.resource)
 	img.FillMode = canvas.ImageFillContain
-	const s float32 = 32
+	const s float32 = 72
 	img.SetMinSize(fyne.NewSize(s, s))
 	img.Resize(fyne.NewSize(s, s))
-	center := container.NewCenter(img)
-	return &pendingUserIconRenderer{widget: w, image: img, objects: []fyne.CanvasObject{center}}
+	label := canvas.NewText(w.label, theme.ForegroundColor())
+	label.Alignment = fyne.TextAlignCenter
+	label.TextSize = 12
+	sub := canvas.NewText(w.subLabel, color.NRGBA{R: 130, G: 136, B: 150, A: 255})
+	sub.Alignment = fyne.TextAlignCenter
+	sub.TextSize = 11
+	labels := container.NewVBox(
+		container.NewCenter(label),
+		layout.NewSpacer(),
+		container.NewCenter(sub),
+	)
+	card := container.NewVBox(
+		container.NewCenter(img),
+		layout.NewSpacer(),
+		labels,
+		layout.NewSpacer(),
+	)
+	return &pendingUserIconRenderer{widget: w, image: img, label: label, sub: sub, objects: []fyne.CanvasObject{card}}
 }
 
-func (r *pendingUserIconRenderer) Layout(size fyne.Size)        { r.objects[0].Resize(size) }
-func (r *pendingUserIconRenderer) MinSize() fyne.Size           { return fyne.NewSize(36, 36) }
-func (r *pendingUserIconRenderer) Refresh()                     { r.image.Resource = r.widget.resource; r.image.Refresh() }
+func (r *pendingUserIconRenderer) Layout(size fyne.Size) { r.objects[0].Resize(size) }
+func (r *pendingUserIconRenderer) MinSize() fyne.Size    { return fyne.NewSize(90, 116) }
+func (r *pendingUserIconRenderer) Refresh() {
+	r.image.Resource = r.widget.resource
+	r.image.Refresh()
+	r.label.Text = r.widget.label
+	r.label.Refresh()
+	r.sub.Text = r.widget.subLabel
+	r.sub.Refresh()
+}
 func (r *pendingUserIconRenderer) Objects() []fyne.CanvasObject { return r.objects }
 func (r *pendingUserIconRenderer) Destroy()                     {}
 
 func (w *PendingUserIcon) Tapped(_ *fyne.PointEvent) {
-	d := dialog.NewCustomConfirm(
-		fmt.Sprintf("Queued: %s (%s)", w.user.Name, w.user.ID),
-		"Assign",
-		"Remove",
-		widget.NewLabel("Choose an action for this queued user."),
-		func(assign bool) {
-			if assign {
-				if w.onAssign != nil {
-					w.onAssign(w.user)
-				}
-			} else {
-				if err := removeQueuedUser(w.user.ID); err != nil {
-					dialog.ShowError(err, mainWindow)
-				}
-			}
-		},
-		mainWindow,
+	if mainWindow == nil {
+		return
+	}
+	info := widget.NewLabel("Choose what to do with this queued user.")
+	var dlg dialog.Dialog
+	assignBtn := widget.NewButton("Assign", func() {
+		if w.onAssign != nil {
+			w.onAssign(w.user)
+		}
+		dlg.Hide()
+	})
+	removeBtn := widget.NewButton("Remove", func() {
+		if err := removeQueuedUser(w.user.ID); err != nil {
+			dialog.ShowError(err, mainWindow)
+		}
+		dlg.Hide()
+	})
+	closeBtn := widget.NewButton("Close", func() { dlg.Hide() })
+	content := container.NewVBox(
+		widget.NewLabel(fmt.Sprintf("Queued: %s (%s)", w.user.Name, w.user.ID)),
+		info,
+		container.NewHBox(layout.NewSpacer(), assignBtn, removeBtn, closeBtn),
 	)
-	d.Show()
+	box := container.NewPadded(content)
+	dlg = dialog.NewCustomWithoutButtons("Queued User", box, mainWindow)
+	dlg.Show()
+}
+
+func (w *PendingUserIcon) Dragged(ev *fyne.DragEvent) {
+	updateQueuedUserDrag(w.user.ID, ev.AbsolutePosition)
+}
+
+func (w *PendingUserIcon) DragEnd() {
+	endQueuedUserDrag()
 }
 
 func ensureRaccoonIcon() fyne.Resource {
 	if raccoonIconResource != nil {
 		return raccoonIconResource
 	}
-	path := filepath.Join(imgBaseDir, "raccoon.png")
+	path := filepath.Join(imgBaseDir, "racoon.png")
 	if _, err := os.Stat(path); err == nil {
 		res, _ := fyne.LoadResourceFromPath(path)
 		raccoonIconResource = res
@@ -162,23 +239,175 @@ func ensureRaccoonIcon() fyne.Resource {
 	return raccoonIconResource
 }
 
+func loadQueuedEntries() {
+	path := queueFile
+	data, err := os.ReadFile(path)
+	if err != nil {
+		queuedEntries = []queueEntry{}
+		return
+	}
+	var entries []queueEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		queuedEntries = []queueEntry{}
+		return
+	}
+	queuedEntries = entries
+	cleanQueuedEntries()
+}
+
+func saveQueuedEntries() {
+	if err := ensureLogDir(); err != nil {
+		return
+	}
+	data, _ := json.MarshalIndent(queuedEntries, "", "  ")
+	_ = os.WriteFile(queueFile, data, 0o644)
+}
+
+func cleanQueuedEntries() {
+	valid := make(map[string]bool)
+	for _, u := range activeUsers {
+		if u.PCID == 0 {
+			valid[u.ID] = true
+		}
+	}
+	filtered := make([]queueEntry, 0, len(queuedEntries))
+	changed := false
+	for _, entry := range queuedEntries {
+		if valid[entry.UserID] {
+			filtered = append(filtered, entry)
+			delete(valid, entry.UserID)
+		} else {
+			changed = true
+		}
+	}
+	queuedEntries = filtered
+	for id := range valid {
+		ensureQueuedEntry(id, time.Time{})
+	}
+	if changed {
+		saveQueuedEntries()
+	}
+}
+
+func ensureQueuedEntry(userID string, ts time.Time) {
+	if userID == "" {
+		return
+	}
+	for _, entry := range queuedEntries {
+		if entry.UserID == userID {
+			return
+		}
+	}
+	if ts.IsZero() {
+		ts = time.Now()
+	}
+	queuedEntries = append(queuedEntries, queueEntry{UserID: userID, EnqueuedAt: ts})
+	saveQueuedEntries()
+}
+
+func removeQueuedEntry(userID string) {
+	if userID == "" {
+		return
+	}
+	idx := -1
+	for i, entry := range queuedEntries {
+		if entry.UserID == userID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return
+	}
+	queuedEntries = append(queuedEntries[:idx], queuedEntries[idx+1:]...)
+	saveQueuedEntries()
+}
+
+func orderedQueuedUsers(users []User) []User {
+	if len(users) == 0 {
+		return []User{}
+	}
+	idMap := make(map[string]User, len(users))
+	for _, u := range users {
+		idMap[u.ID] = u
+	}
+	ordered := make([]User, 0, len(users))
+	for _, entry := range queuedEntries {
+		if u, ok := idMap[entry.UserID]; ok {
+			ordered = append(ordered, u)
+			delete(idMap, entry.UserID)
+		}
+	}
+	for _, u := range idMap {
+		ordered = append(ordered, u)
+		ensureQueuedEntry(u.ID, u.CheckInTime)
+	}
+	return ordered
+}
+
+func queueEntryForUser(userID string) *queueEntry {
+	for i := range queuedEntries {
+		if queuedEntries[i].UserID == userID {
+			return &queuedEntries[i]
+		}
+	}
+	return nil
+}
+
+func queueTimeForUser(userID string) time.Time {
+	if entry := queueEntryForUser(userID); entry != nil {
+		return entry.EnqueuedAt
+	}
+	return time.Now()
+}
+
+func queueTimeLabel(userID string) string {
+	return formatAgo(queueTimeForUser(userID))
+}
+
 func refreshPendingIcons() {
 	if pendingIconsBox == nil {
 		return
 	}
 	pendingIconsBox.Objects = pendingIconsBox.Objects[:0]
+	pendingIconWidgets = pendingIconWidgets[:0]
 	iconRes := ensureRaccoonIcon()
-	for _, u := range getPendingUsers() {
+	queuedUsers := getPendingUsers()
+	for idx, u := range queuedUsers {
 		user := u
+		label := fmt.Sprintf("%02d. %s", idx+1, firstLastNonEmpty(user.Name))
+		label = truncateLabel(label, 20)
+		subLabel := queueTimeLabel(user.ID)
 		icon := newPendingUserIcon(user, iconRes, func(sel User) {
 			assignmentUserID = sel.ID
 			if assignmentNoticeLabel != nil {
 				assignmentNoticeLabel.SetText(fmt.Sprintf("Assignment mode: click a free device for %s (%s).", sel.Name, sel.ID))
 			}
 		})
+		icon.SetLabels(label, subLabel)
 		pendingIconsBox.Add(icon)
+		pendingIconWidgets = append(pendingIconWidgets, icon)
 	}
 	pendingIconsBox.Refresh()
+}
+
+func updatePendingIconTimes() {
+	if len(pendingIconWidgets) == 0 {
+		return
+	}
+	queuedUsers := getPendingUsers()
+	for idx, icon := range pendingIconWidgets {
+		if idx >= len(queuedUsers) {
+			break
+		}
+		user := queuedUsers[idx]
+		label := fmt.Sprintf("%02d. %s", idx+1, firstLastNonEmpty(user.Name))
+		label = truncateLabel(label, 20)
+		icon.SetLabels(label, queueTimeLabel(user.ID))
+	}
+	if pendingIconsBox != nil {
+		pendingIconsBox.Refresh()
+	}
 }
 
 type DeviceStatusLayoutWidget struct {
@@ -503,7 +732,7 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 				layoutWidget.transientDragPos = center
 				layoutWidget.swapDragActive = layoutWidget.layoutLocked && device.Type == "PC" && device.Status == "occupied"
 				if layoutWidget.swapDragActive {
-					layoutWidget.updateDragIndicator(dragEvent.AbsolutePosition, true)
+					updateDragOverlay(dragEvent.AbsolutePosition, true)
 				}
 				break
 			}
@@ -530,7 +759,7 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 		}
 		layoutWidget.transientDragPos = fyne.NewPos(newX, newY)
 		if layoutWidget.layoutLocked && layoutWidget.swapDragActive {
-			layoutWidget.updateDragIndicator(dragEvent.AbsolutePosition, true)
+			updateDragOverlay(dragEvent.AbsolutePosition, true)
 		} else {
 			layoutWidget.Refresh()
 		}
@@ -540,7 +769,7 @@ func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent)
 func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	if !layoutWidget.isDragging || layoutWidget.draggingDeviceID == 0 {
 		if layoutWidget.swapDragActive {
-			layoutWidget.updateDragIndicator(fyne.NewPos(0, 0), false)
+			updateDragOverlay(fyne.NewPos(0, 0), false)
 		}
 		layoutWidget.isDragging = false
 		layoutWidget.draggingDeviceID = 0
@@ -550,7 +779,7 @@ func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	if layoutWidget.layoutLocked {
 		layoutWidget.handleLockedDrop()
 		if layoutWidget.swapDragActive {
-			layoutWidget.updateDragIndicator(fyne.NewPos(0, 0), false)
+			updateDragOverlay(fyne.NewPos(0, 0), false)
 		}
 		layoutWidget.isDragging = false
 		layoutWidget.draggingDeviceID = 0
@@ -579,7 +808,7 @@ func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 	layoutWidget.isDragging = false
 	layoutWidget.draggingDeviceID = 0
 	if layoutWidget.swapDragActive {
-		layoutWidget.updateDragIndicator(fyne.NewPos(0, 0), false)
+		updateDragOverlay(fyne.NewPos(0, 0), false)
 	}
 	layoutWidget.Refresh()
 	layoutWidget.swapDragActive = false
@@ -635,19 +864,20 @@ func (layoutWidget *DeviceStatusLayoutWidget) deviceAtPosition(pos fyne.Position
 	return nil
 }
 
-func (layoutWidget *DeviceStatusLayoutWidget) updateDragIndicator(pos fyne.Position, active bool) {
+func updateDragOverlay(pos fyne.Position, active bool) {
 	if mainWindow == nil {
 		return
 	}
 	canvasObj := mainWindow.Canvas()
 	if active {
 		if dragIndicator == nil {
-			img := canvas.NewImageFromResource(theme.MailComposeIcon())
-			img.SetMinSize(fyne.NewSize(28, 28))
-			img.Resize(fyne.NewSize(28, 28))
+			imgPath := filepath.Join(imgBaseDir, "move.png")
+			img := canvas.NewImageFromFile(imgPath)
+			img.SetMinSize(fyne.NewSize(84, 84))
+			img.Resize(fyne.NewSize(84, 84))
 			dragIndicator = img
 		}
-		dragIndicator.Move(fyne.NewPos(pos.X+12, pos.Y+12))
+		dragIndicator.Move(fyne.NewPos(pos.X+20, pos.Y+20))
 		if !dragIndicatorVisible {
 			canvasObj.Overlays().Add(dragIndicator)
 			dragIndicatorVisible = true
@@ -658,6 +888,66 @@ func (layoutWidget *DeviceStatusLayoutWidget) updateDragIndicator(pos fyne.Posit
 		canvasObj.Overlays().Remove(dragIndicator)
 		dragIndicatorVisible = false
 	}
+}
+
+func updateQueuedUserDrag(userID string, pos fyne.Position) {
+	if pendingDragActive && pendingDragUserID != userID {
+		return
+	}
+	pendingDragUserID = userID
+	pendingDragActive = true
+	pendingDragLastPos = pos
+	updateDragOverlay(pos, true)
+}
+
+func endQueuedUserDrag() {
+	if !pendingDragActive {
+		return
+	}
+	updateDragOverlay(fyne.NewPos(0, 0), false)
+	attemptAssignQueuedUserAtPos(pendingDragLastPos)
+	pendingDragActive = false
+	pendingDragUserID = ""
+}
+
+func cancelQueuedUserDrag() {
+	if !pendingDragActive {
+		return
+	}
+	updateDragOverlay(fyne.NewPos(0, 0), false)
+	pendingDragActive = false
+	pendingDragUserID = ""
+}
+
+func attemptAssignQueuedUserAtPos(absPos fyne.Position) {
+	if pendingDragUserID == "" || deviceLayoutWidget == nil {
+		return
+	}
+	driver := fyne.CurrentApp().Driver()
+	if driver == nil {
+		return
+	}
+	widgetPos := driver.AbsolutePositionForObject(deviceLayoutWidget)
+	size := deviceLayoutWidget.Size()
+	if absPos.X < widgetPos.X || absPos.Y < widgetPos.Y ||
+		absPos.X > widgetPos.X+size.Width || absPos.Y > widgetPos.Y+size.Height {
+		return
+	}
+	rel := fyne.NewPos(absPos.X-widgetPos.X, absPos.Y-widgetPos.Y)
+	target := deviceLayoutWidget.deviceAtPosition(rel)
+	if target == nil || target.Type != "PC" || target.Status != "free" {
+		cancelQueuedUserDrag()
+		return
+	}
+	if err := assignQueuedUserToDevice(pendingDragUserID, target.ID); err != nil {
+		dialog.ShowError(err, mainWindow)
+		cancelQueuedUserDrag()
+		return
+	}
+	if pendingIconsBox != nil {
+		refreshPendingIcons()
+	}
+	cancelQueuedUserDrag()
 }
 
 type deviceVisual struct {
@@ -691,6 +981,16 @@ func firstLast(name string) string {
 		return parts[0]
 	}
 	return ""
+}
+
+func firstLastNonEmpty(name string) string {
+	if trimmed := strings.TrimSpace(name); trimmed != "" {
+		if out := firstLast(trimmed); out != "" {
+			return out
+		}
+		return trimmed
+	}
+	return "Unnamed"
 }
 
 func usersOnDevice(deviceID int) []User {
@@ -831,12 +1131,23 @@ func (layoutWidget *DeviceStatusLayoutWidget) nearestSlot(position fyne.Position
 
 func ensureLogDir() error { return os.MkdirAll(logDir, 0o755) }
 
-func getLogFilePath() string {
-	return filepath.Join(logDir, fmt.Sprintf("lounge-%s.json", time.Now().Format("2006-01-02")))
+func todaysLogDate() string { return time.Now().Format("2006-01-02") }
+
+func getLogFilePath() string { return getLogFilePathForDate(todaysLogDate()) }
+
+func getLogFilePathForDate(date string) string {
+	if date == "" {
+		date = todaysLogDate()
+	}
+	return filepath.Join(logDir, fmt.Sprintf("lounge-%s.json", date))
 }
 
 func readDailyLogEntries() ([]LogEntry, error) {
-	p := getLogFilePath()
+	return readLogEntriesForDate(todaysLogDate())
+}
+
+func readLogEntriesForDate(date string) ([]LogEntry, error) {
+	p := getLogFilePathForDate(date)
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		return []LogEntry{}, nil
 	}
@@ -902,8 +1213,9 @@ func recordLogEvent(isCheckIn bool, u User, deviceID int, original *time.Time) {
 	}
 	fyne.Do(func() {
 		currentLogEntries = entries
-		if logTable != nil {
-			logTable.Refresh()
+		if logList != nil {
+			logList.Refresh()
+			logRefreshPending = false
 		} else {
 			logRefreshPending = true
 		}
@@ -924,70 +1236,152 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%ds", s)
 }
 
+func formatAgo(ts time.Time) string {
+	if ts.IsZero() {
+		return "just now"
+	}
+	if ts.After(time.Now()) {
+		return "just now"
+	}
+	return fmt.Sprintf("%s ago", formatDuration(time.Since(ts)))
+}
+
 func updateCurrentLogEntriesCache() {
-	entries, err := readDailyLogEntries()
+	if selectedLogDate == "" {
+		selectedLogDate = todaysLogDate()
+	}
+	entries, err := readLogEntriesForDate(selectedLogDate)
 	if err != nil {
 		fmt.Println("Error updating log cache:", err)
 		currentLogEntries = []LogEntry{}
 	} else {
 		currentLogEntries = entries
 	}
+	refreshLogDateOptions()
+}
+
+func listAvailableLogDates() []string {
+	files, err := os.ReadDir(logDir)
+	if err != nil {
+		return []string{todaysLogDate()}
+	}
+	dates := make(map[string]bool)
+	dates[todaysLogDate()] = true
+	for _, f := range files {
+		name := f.Name()
+		if strings.HasPrefix(name, "lounge-") && strings.HasSuffix(name, ".json") && len(name) >= len("lounge-2006-01-02.json") {
+			date := strings.TrimSuffix(strings.TrimPrefix(name, "lounge-"), ".json")
+			dates[date] = true
+		}
+	}
+	out := make([]string, 0, len(dates))
+	for d := range dates {
+		out = append(out, d)
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(out)))
+	return out
+}
+
+func refreshLogDateOptions() {
+	if logDateSelect == nil {
+		return
+	}
+	options := listAvailableLogDates()
+	logDateSelect.Options = options
+	logDateSelect.Refresh()
+}
+
+func setLogDate(date string) {
+	if date == "" {
+		date = todaysLogDate()
+	}
+	selectedLogDate = date
+	if logDateSelect != nil && logDateSelect.Selected != date {
+		logDateSelect.Selected = date
+		logDateSelect.Refresh()
+	}
+	updateCurrentLogEntriesCache()
+	if logList != nil {
+		logList.Refresh()
+	}
 }
 
 func buildLogView() fyne.CanvasObject {
 	updateCurrentLogEntriesCache()
-	logTable = widget.NewTable(
-		func() (int, int) { return len(currentLogEntries) + 1, 6 },
-		func() fyne.CanvasObject { return widget.NewLabel("") },
-		func(id widget.TableCellID, o fyne.CanvasObject) {
-			l := o.(*widget.Label)
-			if id.Row == 0 {
-				l.TextStyle.Bold = true
-				switch id.Col {
-				case 0:
-					l.SetText("User Name")
-				case 1:
-					l.SetText("User ID")
-				case 2:
-					l.SetText("Device ID")
-				case 3:
-					l.SetText("Checked In")
-				case 4:
-					l.SetText("Checked Out")
-				case 5:
-					l.SetText("Usage Time")
-				}
+	logList = widget.NewList(
+		func() int { return len(currentLogEntries) },
+		func() fyne.CanvasObject { return newLogEntryCard() },
+		func(i widget.ListItemID, o fyne.CanvasObject) {
+			if i < 0 || i >= len(currentLogEntries) {
 				return
 			}
-			l.TextStyle.Bold = false
-			e := currentLogEntries[id.Row-1]
-			switch id.Col {
-			case 0:
-				l.SetText(e.UserName)
-			case 1:
-				l.SetText(e.UserID)
-			case 2:
-				l.SetText(strconv.Itoa(e.PCID))
-			case 3:
-				l.SetText(e.CheckInTime.Format("15:04:05 (Jan 02)"))
-			case 4:
-				if e.CheckOutTime.IsZero() {
-					l.SetText("-")
-				} else {
-					l.SetText(e.CheckOutTime.Format("15:04:05 (Jan 02)"))
-				}
-			case 5:
-				l.SetText(e.UsageTime)
-			}
+			card := o.(*logEntryCard)
+			card.SetEntry(currentLogEntries[i])
 		},
 	)
-	logTable.SetColumnWidth(0, 180)
-	logTable.SetColumnWidth(1, 100)
-	logTable.SetColumnWidth(2, 70)
-	logTable.SetColumnWidth(3, 150)
-	logTable.SetColumnWidth(4, 150)
-	logTable.SetColumnWidth(5, 120)
-	return container.NewScroll(logTable)
+	logRefreshPending = false
+	header := widget.NewLabelWithStyle("Live Activity", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	dates := listAvailableLogDates()
+	if selectedLogDate == "" {
+		selectedLogDate = todaysLogDate()
+	}
+	logDateSelect = widget.NewSelect(dates, func(val string) {
+		setLogDate(val)
+	})
+	logDateSelect.PlaceHolder = "Select date"
+	logDateSelect.Selected = selectedLogDate
+	toolbar := container.NewHBox(header, layout.NewSpacer(), logDateSelect)
+	return container.NewBorder(toolbar, nil, nil, nil, logList)
+}
+
+type logEntryCard struct {
+	widget.BaseWidget
+	line  *widget.Label
+	badge *canvas.Text
+}
+
+func newLogEntryCard() *logEntryCard {
+	c := &logEntryCard{
+		line:  widget.NewLabel(""),
+		badge: canvas.NewText("", theme.PrimaryColor()),
+	}
+	c.ExtendBaseWidget(c)
+	return c
+}
+
+func (c *logEntryCard) CreateRenderer() fyne.WidgetRenderer {
+	c.line.Wrapping = fyne.TextTruncate
+	c.line.Alignment = fyne.TextAlignLeading
+	c.badge.TextStyle.Bold = true
+	c.badge.Alignment = fyne.TextAlignCenter
+	c.badge.TextSize = 10
+	right := container.NewCenter(c.badge)
+	body := container.NewBorder(nil, nil, right, nil, c.line)
+	return widget.NewSimpleRenderer(body)
+}
+
+func (c *logEntryCard) SetEntry(entry LogEntry) {
+	checkIn := entry.CheckInTime.Format("Jan 02 15:04")
+	outText := "--"
+	if entry.CheckOutTime.IsZero() {
+		outText = "--"
+		c.badge.Text = "ACTIVE"
+		c.badge.Color = color.NRGBA{R: 4, G: 165, B: 229, A: 255}
+	} else {
+		outText = entry.CheckOutTime.Format("Jan 02 15:04")
+		c.badge.Text = "DONE"
+		c.badge.Color = color.NRGBA{R: 64, G: 160, B: 43, A: 255}
+	}
+	session := entry.UsageTime
+	if entry.CheckOutTime.IsZero() {
+		session = formatDuration(time.Since(entry.CheckInTime))
+	} else if session == "" {
+		session = formatDuration(entry.CheckOutTime.Sub(entry.CheckInTime))
+	}
+	line := fmt.Sprintf("%s · PC %d    In: %s    Out: %s    Session: %s", entry.UserName, entry.PCID, checkIn, outText, session)
+	c.line.SetText(line)
+	c.line.Refresh()
+	c.badge.Refresh()
 }
 
 type leftRatioLayout struct {
@@ -1021,6 +1415,69 @@ func (l *leftRatioLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		return fyne.NewSize(l.minW, min.Height)
 	}
 	return min
+}
+
+type verticalWrapLayout struct {
+	padding float32
+}
+
+func (l *verticalWrapLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	padding := l.padding
+	if padding <= 0 {
+		padding = 8
+	}
+	maxHeight := size.Height
+	if maxHeight <= 0 {
+		maxHeight = 320
+	}
+	x := float32(0)
+	y := float32(0)
+	colWidth := float32(0)
+	for _, obj := range objects {
+		if obj == nil || !obj.Visible() {
+			continue
+		}
+		item := obj.MinSize()
+		if y+item.Height > maxHeight && y > 0 {
+			x += colWidth + padding
+			y = 0
+			colWidth = 0
+		}
+		obj.Resize(item)
+		obj.Move(fyne.NewPos(x, y))
+		y += item.Height + padding
+		if item.Width > colWidth {
+			colWidth = item.Width
+		}
+	}
+}
+
+func (l *verticalWrapLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	padding := l.padding
+	if padding <= 0 {
+		padding = 8
+	}
+	var width, height float32
+	for i, obj := range objects {
+		if obj == nil || !obj.Visible() {
+			continue
+		}
+		item := obj.MinSize()
+		if item.Width > width {
+			width = item.Width
+		}
+		if i > 0 {
+			height += padding
+		}
+		height += item.Height
+	}
+	return fyne.NewSize(width, height)
 }
 
 type twoPaneLayout struct {
@@ -1221,14 +1678,12 @@ func buildInlineCheckInForm() *fyne.Container {
 
 func buildPendingQueueView() fyne.CanvasObject {
 	assignmentNoticeLabel = widget.NewLabel("")
-	pendingIconsBox = container.NewHBox()
+	pendingIconsBox = container.New(&verticalWrapLayout{padding: 10})
 	refreshPendingIcons()
 
 	header := widget.NewLabelWithStyle("Queued Check-Ins", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	scroll := container.NewHScroll(pendingIconsBox)
-	scroll.SetMinSize(fyne.NewSize(0, 48))
-
-	return container.NewVBox(header, assignmentNoticeLabel, scroll)
+	centered := container.NewHBox(layout.NewSpacer(), pendingIconsBox, layout.NewSpacer())
+	return container.NewVBox(header, assignmentNoticeLabel, centered)
 }
 
 func loadMembers() {
@@ -1364,6 +1819,7 @@ func initData() {
 		}
 	}
 	loadMembers()
+	loadQueuedEntries()
 }
 
 func saveData() {
@@ -1410,6 +1866,9 @@ func activeUserIDsOnDevice(deviceID int) []string {
 func registerUser(name, userID string, deviceID int) error {
 	if getUserByID(userID) != nil {
 		existing := getUserByID(userID)
+		if existing.PCID == 0 {
+			return fmt.Errorf("user ID %s (%s) is already in the queue", userID, existing.Name)
+		}
 		return fmt.Errorf("user ID %s (%s) already checked in on Device %d", userID, existing.Name, existing.PCID)
 	}
 
@@ -1431,6 +1890,9 @@ func registerUser(name, userID string, deviceID int) error {
 
 	newUser := User{ID: userID, Name: name, CheckInTime: time.Now(), PCID: deviceID}
 	activeUsers = append(activeUsers, newUser)
+	if deviceID == 0 {
+		ensureQueuedEntry(userID, newUser.CheckInTime)
+	}
 
 	if memberByID(userID) == nil {
 		appendMember(Member{Name: name, ID: userID})
@@ -1501,6 +1963,7 @@ func removeQueuedUser(userID string) error {
 	}
 	original := u.CheckInTime
 	activeUsers = append(activeUsers[:idx], activeUsers[idx+1:]...)
+	removeQueuedEntry(userID)
 	saveData()
 	go recordLogEvent(false, *u, 0, &original)
 	refreshTrigger <- true
@@ -1545,6 +2008,7 @@ func assignQueuedUserToDevice(userID string, deviceID int) error {
 	}
 	logFileMutex.Unlock()
 
+	removeQueuedEntry(userID)
 	refreshTrigger <- true
 	return nil
 }
@@ -1614,7 +2078,7 @@ func getPendingUsers() []User {
 			out = append(out, u)
 		}
 	}
-	return out
+	return orderedQueuedUsers(out)
 }
 
 func showConsoleCheckoutDialog(d Device) {
@@ -1998,12 +2462,13 @@ func main() {
 	)
 	tabs.SetTabLocation(container.TabLocationTop)
 	tabs.OnSelected = func(it *container.TabItem) {
-		if it.Text == "Log" {
+		logTabActive = it.Text == "Log"
+		if logTabActive {
 			updateCurrentLogEntriesCache()
-			if logTable != nil {
-				logTable.Refresh()
+			if logList != nil {
+				logList.Refresh()
+				logRefreshPending = false
 			}
-			logRefreshPending = false
 		}
 	}
 
@@ -2014,8 +2479,10 @@ func main() {
 
 	go func() {
 		logTicker := time.NewTicker(5 * time.Minute)
+		liveLogTicker := time.NewTicker(1 * time.Second)
 		lastDate := time.Now().Format("2006-01-02")
 		defer logTicker.Stop()
+		defer liveLogTicker.Stop()
 
 		for {
 			select {
@@ -2025,18 +2492,27 @@ func main() {
 					if current != lastDate {
 						lastDate = current
 						updateCurrentLogEntriesCache()
-						if logTable != nil {
-							logTable.Refresh()
-						} else {
-							logRefreshPending = true
+						if logList != nil {
+							logList.Refresh()
 						}
+						logRefreshPending = true
 					}
+				})
+			case <-liveLogTicker.C:
+				fyne.Do(func() {
+					if logTabActive && logList != nil {
+						logList.Refresh()
+					}
+					updatePendingIconTimes()
 				})
 			case <-refreshTrigger:
 				fyne.Do(func() {
 					updateStatus()
 					tabs.Items[0].Content = buildDeviceRoomContent()
 					tabs.Refresh()
+					if logList != nil {
+						logList.Refresh()
+					}
 					if mainWindow != nil && mainWindow.Content() != nil {
 						mainWindow.Content().Refresh()
 					}
