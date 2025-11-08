@@ -1,40 +1,14 @@
-# Lounge Management System
+```bash
 
-A desktop application for managing gaming lounge operations.
+  ___   _      ___   _      ___   _      ___   _      ___   _
+ [(_)] |=|    [(_)] |=|    [(_)] |=|    [(_)] |=|    [(_)] |=|
+  '-`  |_|     '-`  |_|     '-`  |_|     '-`  |_|     '-`  |_|
+ /mmm/  /     /mmm/  /     /mmm/  /     /mmm/  /     /mmm/  /
+       |____________|____________|____________|____________|
+                             |            |            |
+                         ___  \_      ___  \_      ___  \_
+                        [(_)] |=|    [(_)] |=|    [(_)] |=|
+                         '-`  |_|     '-`  |_|     '-`  |_|
+                        /mmm/        /mmm/        /mmm/
 
-## Installation
-
-### Option 1: Using Pre-released Packages
-
-Go to the [Releases](https://github.com/odesaur/lounge/releases) page
-
-### Option 2: Compile from Source (Unix)
-
-#### Build Steps
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/odesaur/lounge.git
-   cd lounge
-   ```
-
-2. Install dependencies:
-   ```bash
-   go mod download
-   ```
-
-3. Build the application:
-   ```bash
-   go build -o GamingLounge lounge.go theme.go
-   ```
-
-4. Run the application:
-   ```bash
-   ./GamingLounge
-   ```
-
-## Data Storage
-
-- Active user data: Stored in `log/active_users.json`
-- Member information: Stored in `membership.csv`
-- Daily activity logs: Stored in `log/lounge-YYYY-MM-DD.json`
+```bash
