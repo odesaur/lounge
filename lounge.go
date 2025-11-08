@@ -87,8 +87,6 @@ var (
 	raccoonIconResource      fyne.Resource
 )
 
-// ---------- Small queued-user icon ----------
-
 type PendingUserIcon struct {
 	widget.BaseWidget
 	user     User
@@ -179,8 +177,6 @@ func refreshPendingIcons() {
 	pendingIconsBox.Refresh()
 }
 
-// ---------- Device layout widget ----------
-
 type DeviceStatusLayoutWidget struct {
 	widget.BaseWidget
 	containerSize    fyne.Size
@@ -193,229 +189,313 @@ type DeviceStatusLayoutWidget struct {
 
 	pcIconSize      float32
 	consoleIconSize float32
-	slotSpacingX    float32
-	slotSpacingY    float32
 	slotMargin      float32
 }
 
 func NewDeviceStatusLayoutWidget() *DeviceStatusLayoutWidget {
-	w := &DeviceStatusLayoutWidget{
+	layoutWidget := &DeviceStatusLayoutWidget{
 		deviceToSlot:    make(map[int]int),
 		pcIconSize:      64,
 		consoleIconSize: 64,
-		slotSpacingX:    120,
-		slotSpacingY:    150, // more vertical room for names
 		slotMargin:      24,
 	}
-	w.loadDeviceLayout()
-	w.ExtendBaseWidget(w)
-	return w
+	layoutWidget.loadDeviceLayout()
+	layoutWidget.ExtendBaseWidget(layoutWidget)
+	return layoutWidget
 }
 
-func (w *DeviceStatusLayoutWidget) defaultOrder() []int {
-	return []int{16, 15, 14, 11, 12, 13, 10, 9, 8, 7, 6, 5, 1, 2, 3, 4, 17, 18}
+func (layoutWidget *DeviceStatusLayoutWidget) defaultOrder() []int {
+	return []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
 }
 
-func (w *DeviceStatusLayoutWidget) ensureMapping() {
-	if len(w.deviceToSlot) == len(allDevices) {
+func (layoutWidget *DeviceStatusLayoutWidget) ensureMapping() {
+	if len(layoutWidget.deviceToSlot) == len(allDevices) {
 		return
 	}
 	seen := make(map[int]bool)
-	for id := range w.deviceToSlot {
-		seen[id] = true
+	for deviceID := range layoutWidget.deviceToSlot {
+		seen[deviceID] = true
 	}
-	order := w.defaultOrder()
-	slot := 0
-	occ := make(map[int]bool)
-	for _, s := range w.deviceToSlot {
-		occ[s] = true
+	order := layoutWidget.defaultOrder()
+	slotIndex := 0
+	occupiedSlots := make(map[int]bool)
+	for _, slot := range layoutWidget.deviceToSlot {
+		occupiedSlots[slot] = true
 	}
-	for _, d := range order {
-		if !seen[d] {
-			for {
-				if !occ[slot] {
-					w.deviceToSlot[d] = slot
-					occ[slot] = true
-					slot++
-					break
-				}
-				slot++
+	for _, deviceID := range order {
+		if seen[deviceID] {
+			continue
+		}
+		for {
+			if !occupiedSlots[slotIndex] {
+				layoutWidget.deviceToSlot[deviceID] = slotIndex
+				occupiedSlots[slotIndex] = true
+				slotIndex++
+				break
 			}
+			slotIndex++
 		}
 	}
 }
 
-func (w *DeviceStatusLayoutWidget) loadDeviceLayout() {
+func (layoutWidget *DeviceStatusLayoutWidget) loadDeviceLayout() {
 	_ = ensureLogDir()
-	b, err := os.ReadFile(deviceLayoutFile)
-	if err != nil || len(b) == 0 {
-		w.deviceToSlot = make(map[int]int)
-		w.ensureMapping()
-		w.saveDeviceLayout()
+	data, err := os.ReadFile(deviceLayoutFile)
+	if err != nil || len(data) == 0 {
+		layoutWidget.deviceToSlot = make(map[int]int)
+		layoutWidget.ensureMapping()
+		layoutWidget.saveDeviceLayout()
 		return
 	}
-	type entry struct{ DeviceID, Slot int }
-	var entries []entry
-	if json.Unmarshal(b, &entries) != nil {
-		w.deviceToSlot = make(map[int]int)
-		w.ensureMapping()
-		w.saveDeviceLayout()
+	type layoutEntry struct{ DeviceID, Slot int }
+	var entries []layoutEntry
+	if json.Unmarshal(data, &entries) != nil {
+		layoutWidget.deviceToSlot = make(map[int]int)
+		layoutWidget.ensureMapping()
+		layoutWidget.saveDeviceLayout()
 		return
 	}
-	w.deviceToSlot = make(map[int]int)
-	for _, e := range entries {
-		w.deviceToSlot[e.DeviceID] = e.Slot
+	layoutWidget.deviceToSlot = make(map[int]int)
+	for _, entry := range entries {
+		layoutWidget.deviceToSlot[entry.DeviceID] = entry.Slot
 	}
-	w.ensureMapping()
+	layoutWidget.ensureMapping()
 }
 
-func (w *DeviceStatusLayoutWidget) saveDeviceLayout() {
-	type entry struct{ DeviceID, Slot int }
-	entries := make([]entry, 0, len(w.deviceToSlot))
-	for id, s := range w.deviceToSlot {
-		entries = append(entries, entry{DeviceID: id, Slot: s})
+func (layoutWidget *DeviceStatusLayoutWidget) saveDeviceLayout() {
+	type layoutEntry struct{ DeviceID, Slot int }
+	entries := make([]layoutEntry, 0, len(layoutWidget.deviceToSlot))
+	for deviceID, slot := range layoutWidget.deviceToSlot {
+		entries = append(entries, layoutEntry{DeviceID: deviceID, Slot: slot})
 	}
 	data, _ := json.MarshalIndent(entries, "", "  ")
 	_ = os.WriteFile(deviceLayoutFile, data, 0o644)
 }
 
-func (w *DeviceStatusLayoutWidget) computeSlots() {
-	if w.containerSize.IsZero() {
+func (layoutWidget *DeviceStatusLayoutWidget) computeSlots() {
+	if layoutWidget.containerSize.IsZero() {
 		return
 	}
-	w.slotPositions = w.slotPositions[:0]
+	layoutWidget.slotPositions = layoutWidget.slotPositions[:0]
 	total := len(allDevices)
-	leftWidth := w.containerSize.Width * 0.85
-	leftX := w.slotMargin
-	topY := w.slotMargin
-	rowHeights := []int{3, 3, 3, 3, 4}
-	placed := 0
-	for r := 0; r < len(rowHeights) && placed < 16 && placed < total; r++ {
-		cols := rowHeights[r]
-		rowY := topY + float32(r)*w.slotSpacingY
-		rowWidth := float32(cols-1) * w.slotSpacingX
-		startX := leftX + (leftWidth-rowWidth)/2
-		for c := 0; c < cols && placed < 16 && placed < total; c++ {
-			w.slotPositions = append(w.slotPositions, fyne.NewPos(startX+float32(c)*w.slotSpacingX, rowY))
-			placed++
+	if total == 0 {
+		return
+	}
+
+	pcCount := 0
+	consoleCount := 0
+	for _, device := range allDevices {
+		if device.Type == "PC" {
+			pcCount++
+		} else {
+			consoleCount++
 		}
 	}
-	if placed < total {
-		rightX := leftWidth + w.slotMargin*2
-		y1 := topY + 1*w.slotSpacingY
-		y2 := topY + 3*w.slotSpacingY
-		w.slotPositions = append(w.slotPositions, fyne.NewPos(rightX, y1))
-		if len(w.slotPositions) < total {
-			w.slotPositions = append(w.slotPositions, fyne.NewPos(rightX, y2))
+
+	availableWidth := layoutWidget.containerSize.Width - layoutWidget.slotMargin*2
+	if availableWidth <= 0 {
+		availableWidth = layoutWidget.containerSize.Width
+	}
+	if availableWidth <= 0 {
+		availableWidth = 400
+	}
+	consoleAreaWidth := clampFloat(layoutWidget.containerSize.Width*0.18, 130, 220)
+	if pcCount == 0 {
+		consoleAreaWidth = 0
+	}
+	pcAreaWidth := availableWidth - consoleAreaWidth - layoutWidget.slotMargin
+	maxColumns := 4
+	if pcAreaWidth < float32(maxColumns)*70 {
+		consoleAreaWidth = clampFloat(layoutWidget.containerSize.Width*0.12, 100, 140)
+		pcAreaWidth = availableWidth - consoleAreaWidth
+	}
+	if pcAreaWidth < float32(maxColumns)*60 {
+		consoleAreaWidth = 0
+		pcAreaWidth = availableWidth
+	}
+	if pcAreaWidth <= 0 {
+		pcAreaWidth = availableWidth
+	}
+
+	columnWidth := pcAreaWidth / float32(maxColumns)
+	if columnWidth <= 0 {
+		columnWidth = 80
+	}
+
+	rowCounts := []int{3, 3, 3, 3, 4}
+	totalRows := len(rowCounts)
+	availableHeight := layoutWidget.containerSize.Height - layoutWidget.slotMargin*2
+	if availableHeight <= 0 {
+		availableHeight = layoutWidget.containerSize.Height
+	}
+	if availableHeight <= 0 {
+		availableHeight = float32(totalRows) * 120
+	}
+	rowHeight := availableHeight / float32(totalRows)
+	if rowHeight <= 0 {
+		rowHeight = 120
+	}
+
+	iconBase := float32(math.Min(float64(columnWidth), float64(rowHeight))) * 0.55
+	layoutWidget.pcIconSize = clampFloat(iconBase, 40, 96)
+	layoutWidget.consoleIconSize = clampFloat(iconBase*1.05, 48, 104)
+
+	gridOriginX := layoutWidget.slotMargin + (pcAreaWidth-columnWidth*float32(maxColumns))/2
+	if gridOriginX < layoutWidget.slotMargin {
+		gridOriginX = layoutWidget.slotMargin
+	}
+
+	added := 0
+	for rowIndex, cols := range rowCounts {
+		if added >= pcCount {
+			break
+		}
+		centerY := layoutWidget.slotMargin + rowHeight*float32(rowIndex) + rowHeight/2
+		rowStart := gridOriginX + (float32(maxColumns-cols)*columnWidth)/2
+		for col := 0; col < cols && added < pcCount; col++ {
+			centerX := rowStart + columnWidth*float32(col) + columnWidth/2
+			layoutWidget.slotPositions = append(layoutWidget.slotPositions, fyne.NewPos(centerX, centerY))
+			added++
 		}
 	}
-	for len(w.slotPositions) < total {
-		w.slotPositions = append(w.slotPositions, fyne.NewPos(leftX, topY))
+
+	consoleX := layoutWidget.containerSize.Width - layoutWidget.slotMargin - consoleAreaWidth/2
+	if consoleAreaWidth == 0 {
+		consoleX = layoutWidget.containerSize.Width - layoutWidget.slotMargin - columnWidth/2
+	}
+	consoleSpacing := layoutWidget.consoleIconSize + 40
+	consoleY := layoutWidget.slotMargin + layoutWidget.consoleIconSize
+	for i := 0; i < consoleCount; i++ {
+		layoutWidget.slotPositions = append(layoutWidget.slotPositions, fyne.NewPos(consoleX, consoleY+float32(i)*consoleSpacing))
+	}
+
+	for len(layoutWidget.slotPositions) < total {
+		layoutWidget.slotPositions = append(layoutWidget.slotPositions, fyne.NewPos(layoutWidget.slotMargin+layoutWidget.pcIconSize, layoutWidget.slotMargin+layoutWidget.pcIconSize))
+	}
+	if len(layoutWidget.slotPositions) > total {
+		layoutWidget.slotPositions = layoutWidget.slotPositions[:total]
 	}
 }
 
-func (w *DeviceStatusLayoutWidget) UpdateDevices() { w.ensureMapping(); w.Refresh() }
+func clampFloat(value, minValue, maxValue float32) float32 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
 
-func (w *DeviceStatusLayoutWidget) Tapped(ev *fyne.PointEvent) {
-	for _, d := range allDevices {
-		center := w.positionForDevice(d.ID)
-		size := w.iconSizeForDevice(d.ID)
+func (layoutWidget *DeviceStatusLayoutWidget) UpdateDevices() {
+	layoutWidget.ensureMapping()
+	layoutWidget.Refresh()
+}
+
+func (layoutWidget *DeviceStatusLayoutWidget) Tapped(tapEvent *fyne.PointEvent) {
+	for _, device := range allDevices {
+		center := layoutWidget.positionForDevice(device.ID)
+		size := layoutWidget.iconSizeForDevice(device.ID)
 		topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
 
-		if ev.Position.X < topLeft.X || ev.Position.X > topLeft.X+size ||
-			ev.Position.Y < topLeft.Y || ev.Position.Y > topLeft.Y+size {
+		if tapEvent.Position.X < topLeft.X || tapEvent.Position.X > topLeft.X+size ||
+			tapEvent.Position.Y < topLeft.Y || tapEvent.Position.Y > topLeft.Y+size {
 			continue
 		}
 
 		if assignmentUserID != "" {
-			target := assignmentUserID
+			targetUserID := assignmentUserID
 			assignmentUserID = ""
 			if assignmentNoticeLabel != nil {
 				assignmentNoticeLabel.SetText("")
 			}
-			if err := assignQueuedUserToDevice(target, d.ID); err != nil {
+			if err := assignQueuedUserToDevice(targetUserID, device.ID); err != nil {
 				dialog.ShowError(err, mainWindow)
 			}
 			return
 		}
 
-		if d.Type == "Console" {
-			if d.Status == "occupied" {
-				showConsoleCheckoutDialog(d)
+		if device.Type == "Console" {
+			if device.Status == "occupied" {
+				showConsoleCheckoutDialog(device)
 			} else {
-				showCheckInDialogShared(d.ID, true)
+				showCheckInDialogShared(device.ID, true)
 			}
 			return
 		}
 
-		if d.Status == "occupied" {
-			u := getUserByID(d.UserID)
-			name := "Unknown User"
-			if u != nil {
-				name = u.Name
+		if device.Status == "occupied" {
+			user := getUserByID(device.UserID)
+			userName := "Unknown User"
+			if user != nil {
+				userName = user.Name
 			}
-			dialog.ShowConfirm("Confirm Checkout", fmt.Sprintf("Checkout %s from PC %d?", name, d.ID),
-				func(ok bool) {
-					if ok {
-						if err := checkoutUser(d.UserID); err != nil {
+			dialog.ShowConfirm(
+				"Confirm Checkout",
+				fmt.Sprintf("Checkout %s from PC %d?", userName, device.ID),
+				func(confirm bool) {
+					if confirm {
+						if err := checkoutUser(device.UserID); err != nil {
 							dialog.ShowError(err, mainWindow)
 						}
 					}
-				}, mainWindow)
+				},
+				mainWindow,
+			)
 			return
 		}
 
-		showCheckInDialogShared(d.ID, true)
+		showCheckInDialogShared(device.ID, true)
 		return
 	}
 }
 
-func (w *DeviceStatusLayoutWidget) MouseDown(ev *desktop.MouseEvent) {
-	// Right-click on consoles: checkout selection
-	if ev.Button != desktop.MouseButtonSecondary {
+func (layoutWidget *DeviceStatusLayoutWidget) MouseDown(mouseEvent *desktop.MouseEvent) {
+	if mouseEvent.Button != desktop.MouseButtonSecondary {
 		return
 	}
-	for _, d := range allDevices {
-		if d.Type != "Console" {
+	for _, device := range allDevices {
+		if device.Type != "Console" {
 			continue
 		}
-		center := w.positionForDevice(d.ID)
-		size := w.iconSizeForDevice(d.ID)
+		center := layoutWidget.positionForDevice(device.ID)
+		size := layoutWidget.iconSizeForDevice(device.ID)
 		topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
-		if ev.Position.X >= topLeft.X && ev.Position.X <= topLeft.X+size &&
-			ev.Position.Y >= topLeft.Y && ev.Position.Y <= topLeft.Y+size {
-			if d.Status == "occupied" {
-				showConsoleCheckoutDialog(d)
+		if mouseEvent.Position.X >= topLeft.X && mouseEvent.Position.X <= topLeft.X+size &&
+			mouseEvent.Position.Y >= topLeft.Y && mouseEvent.Position.Y <= topLeft.Y+size {
+			if device.Status == "occupied" {
+				showConsoleCheckoutDialog(device)
 			}
 			return
 		}
 	}
 }
-func (w *DeviceStatusLayoutWidget) MouseUp(_ *desktop.MouseEvent) {}
 
-func (w *DeviceStatusLayoutWidget) Dragged(ev *fyne.DragEvent) {
-	if !w.isDragging {
-		for _, d := range allDevices {
-			center := w.positionForDevice(d.ID)
-			size := w.iconSizeForDevice(d.ID)
+func (layoutWidget *DeviceStatusLayoutWidget) MouseUp(_ *desktop.MouseEvent) {}
+
+func (layoutWidget *DeviceStatusLayoutWidget) Dragged(dragEvent *fyne.DragEvent) {
+	if !layoutWidget.isDragging {
+		for _, device := range allDevices {
+			center := layoutWidget.positionForDevice(device.ID)
+			size := layoutWidget.iconSizeForDevice(device.ID)
 			topLeft := fyne.NewPos(center.X-size/2, center.Y-size/2)
-			if ev.Position.X >= topLeft.X && ev.Position.X <= topLeft.X+size &&
-				ev.Position.Y >= topLeft.Y && ev.Position.Y <= topLeft.Y+size {
-				w.isDragging = true
-				w.draggingDeviceID = d.ID
-				w.dragOffset = fyne.NewPos(ev.Position.X-center.X, ev.Position.Y-center.Y)
-				w.transientDragPos = center
+			if dragEvent.Position.X >= topLeft.X && dragEvent.Position.X <= topLeft.X+size &&
+				dragEvent.Position.Y >= topLeft.Y && dragEvent.Position.Y <= topLeft.Y+size {
+				layoutWidget.isDragging = true
+				layoutWidget.draggingDeviceID = device.ID
+				layoutWidget.dragOffset = fyne.NewPos(dragEvent.Position.X-center.X, dragEvent.Position.Y-center.Y)
+				layoutWidget.transientDragPos = center
 				break
 			}
 		}
 	}
-	if w.isDragging && w.draggingDeviceID != 0 {
-		newX := ev.Position.X - w.dragOffset.X
-		newY := ev.Position.Y - w.dragOffset.Y
-		minX := w.slotMargin + w.pcIconSize/2
-		maxX := w.containerSize.Width - w.slotMargin - w.pcIconSize/2
-		minY := w.slotMargin + w.pcIconSize/2
-		maxY := w.containerSize.Height - w.slotMargin - w.pcIconSize/2
+	if layoutWidget.isDragging && layoutWidget.draggingDeviceID != 0 {
+		newX := dragEvent.Position.X - layoutWidget.dragOffset.X
+		newY := dragEvent.Position.Y - layoutWidget.dragOffset.Y
+		minX := layoutWidget.slotMargin + layoutWidget.pcIconSize/2
+		maxX := layoutWidget.containerSize.Width - layoutWidget.slotMargin - layoutWidget.pcIconSize/2
+		minY := layoutWidget.slotMargin + layoutWidget.pcIconSize/2
+		maxY := layoutWidget.containerSize.Height - layoutWidget.slotMargin - layoutWidget.pcIconSize/2
 		if newX < minX {
 			newX = minX
 		}
@@ -428,76 +508,83 @@ func (w *DeviceStatusLayoutWidget) Dragged(ev *fyne.DragEvent) {
 		if newY > maxY {
 			newY = maxY
 		}
-		w.transientDragPos = fyne.NewPos(newX, newY)
-		w.Refresh()
+		layoutWidget.transientDragPos = fyne.NewPos(newX, newY)
+		layoutWidget.Refresh()
 	}
 }
 
-func (w *DeviceStatusLayoutWidget) DragEnd() {
-	if !w.isDragging || w.draggingDeviceID == 0 {
-		w.isDragging = false
-		w.draggingDeviceID = 0
+func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
+	if !layoutWidget.isDragging || layoutWidget.draggingDeviceID == 0 {
+		layoutWidget.isDragging = false
+		layoutWidget.draggingDeviceID = 0
 		return
 	}
-	targetSlot := w.nearestSlot(w.transientDragPos)
+	targetSlot := layoutWidget.nearestSlot(layoutWidget.transientDragPos)
 	if targetSlot >= 0 {
-		currentSlot := w.deviceToSlot[w.draggingDeviceID]
+		currentSlot := layoutWidget.deviceToSlot[layoutWidget.draggingDeviceID]
 		if currentSlot != targetSlot {
-			otherID := -1
-			for id, s := range w.deviceToSlot {
-				if s == targetSlot {
-					otherID = id
+			otherDeviceID := -1
+			for deviceID, slot := range layoutWidget.deviceToSlot {
+				if slot == targetSlot {
+					otherDeviceID = deviceID
 					break
 				}
 			}
-			w.deviceToSlot[w.draggingDeviceID] = targetSlot
-			if otherID != -1 {
-				w.deviceToSlot[otherID] = currentSlot
+			layoutWidget.deviceToSlot[layoutWidget.draggingDeviceID] = targetSlot
+			if otherDeviceID != -1 {
+				layoutWidget.deviceToSlot[otherDeviceID] = currentSlot
 			}
-			w.saveDeviceLayout()
+			layoutWidget.saveDeviceLayout()
 		}
 	}
-	w.isDragging = false
-	w.draggingDeviceID = 0
-	w.Refresh()
+	layoutWidget.isDragging = false
+	layoutWidget.draggingDeviceID = 0
+	layoutWidget.Refresh()
 }
 
-func (w *DeviceStatusLayoutWidget) positionForDevice(id int) fyne.Position {
-	w.ensureMapping()
-	slot := w.deviceToSlot[id]
-	if slot >= 0 && slot < len(w.slotPositions) {
-		if w.isDragging && w.draggingDeviceID == id {
-			return w.transientDragPos
-		}
-		return w.slotPositions[slot]
+func (layoutWidget *DeviceStatusLayoutWidget) positionForDevice(deviceID int) fyne.Position {
+	layoutWidget.ensureMapping()
+	if layoutWidget.isDragging && layoutWidget.draggingDeviceID == deviceID {
+		return layoutWidget.transientDragPos
 	}
-	if len(w.slotPositions) == 0 {
-		return fyne.NewPos(w.slotMargin+w.pcIconSize, w.slotMargin+w.pcIconSize)
+	slot := layoutWidget.deviceToSlot[deviceID]
+	if slot >= 0 && slot < len(layoutWidget.slotPositions) {
+		return layoutWidget.slotPositions[slot]
 	}
-	return w.slotPositions[slot%len(w.slotPositions)]
+	if len(layoutWidget.slotPositions) == 0 {
+		return fyne.NewPos(layoutWidget.slotMargin+layoutWidget.pcIconSize, layoutWidget.slotMargin+layoutWidget.pcIconSize)
+	}
+	return layoutWidget.slotPositions[slot%len(layoutWidget.slotPositions)]
 }
 
-func (w *DeviceStatusLayoutWidget) iconSizeForDevice(id int) float32 {
-	if id == 17 || id == 18 {
-		return w.consoleIconSize
+func (layoutWidget *DeviceStatusLayoutWidget) iconSizeForDevice(deviceID int) float32 {
+	if deviceID == 17 || deviceID == 18 {
+		return layoutWidget.consoleIconSize
 	}
-	return w.pcIconSize
+	return layoutWidget.pcIconSize
+}
+
+type deviceVisual struct {
+	icon      *canvas.Image
+	primary   *canvas.Text
+	secondary *canvas.Text
 }
 
 type deviceStatusRenderer struct {
 	widget  *DeviceStatusLayoutWidget
 	objects []fyne.CanvasObject
+	visuals map[int]*deviceVisual
 }
 
-func (r *deviceStatusRenderer) Layout(size fyne.Size) {
-	if r.widget.containerSize != size {
-		r.widget.containerSize = size
-		r.widget.computeSlots()
+func (renderer *deviceStatusRenderer) Layout(size fyne.Size) {
+	if renderer.widget.containerSize != size {
+		renderer.widget.containerSize = size
+		renderer.widget.computeSlots()
 	}
-	r.widget.Refresh()
+	renderer.Refresh()
 }
 
-func (r *deviceStatusRenderer) MinSize() fyne.Size { return fyne.NewSize(840, 520) }
+func (renderer *deviceStatusRenderer) MinSize() fyne.Size { return fyne.NewSize(840, 520) }
 
 func firstLast(name string) string {
 	parts := strings.Fields(strings.TrimSpace(name))
@@ -511,113 +598,140 @@ func firstLast(name string) string {
 }
 
 func usersOnDevice(deviceID int) []User {
-	out := []User{}
-	for _, u := range activeUsers {
-		if u.PCID == deviceID {
-			out = append(out, u)
+	users := []User{}
+	for _, user := range activeUsers {
+		if user.PCID == deviceID {
+			users = append(users, user)
 		}
 	}
-	return out
+	return users
 }
 
-func (r *deviceStatusRenderer) Refresh() {
-	r.objects = r.objects[:0]
-	for _, d := range allDevices {
-		center := r.widget.positionForDevice(d.ID)
-		size := r.widget.iconSizeForDevice(d.ID)
+func (renderer *deviceStatusRenderer) Refresh() {
+	for _, device := range allDevices {
+		visual, ok := renderer.visuals[device.ID]
+		if !ok {
+			visual = renderer.newVisualForDevice(device)
+			renderer.visuals[device.ID] = visual
+			renderer.objects = append(renderer.objects, visual.icon, visual.primary, visual.secondary)
+		}
+		renderer.updateVisual(device, visual)
+	}
+}
 
-		var base string
-		if d.Status == "free" {
-			if d.Type == "PC" {
-				base = "free.png"
-			} else {
-				base = "console.png"
-			}
-		} else {
-			if d.Type == "PC" {
-				base = "busy.png"
-			} else {
-				base = "console_busy.png"
+func (renderer *deviceStatusRenderer) Objects() []fyne.CanvasObject { return renderer.objects }
+func (renderer *deviceStatusRenderer) Destroy()                     {}
+
+func (renderer *deviceStatusRenderer) newVisualForDevice(device Device) *deviceVisual {
+	icon := canvas.NewImageFromFile(filepath.Join(imgBaseDir, "free.png"))
+	icon.FillMode = canvas.ImageFillContain
+	primary := canvas.NewText("", theme.ForegroundColor())
+	primary.Alignment = fyne.TextAlignCenter
+	secondary := canvas.NewText("", color.NRGBA{A: 255, R: 150, G: 150, B: 160})
+	secondary.Alignment = fyne.TextAlignCenter
+	secondary.TextSize = 10
+	return &deviceVisual{icon: icon, primary: primary, secondary: secondary}
+}
+
+func (renderer *deviceStatusRenderer) updateVisual(device Device, visual *deviceVisual) {
+	center := renderer.widget.positionForDevice(device.ID)
+	size := renderer.widget.iconSizeForDevice(device.ID)
+	imageName := renderer.imageNameForDevice(device)
+	imagePath := filepath.Join(imgBaseDir, imageName)
+	if visual.icon.File != imagePath {
+		visual.icon.File = imagePath
+	}
+	visual.icon.SetMinSize(fyne.NewSize(size, size))
+	visual.icon.Resize(fyne.NewSize(size, size))
+	visual.icon.Move(fyne.NewPos(center.X-size/2, center.Y-size/2))
+	visual.icon.Refresh()
+
+	nameText := ""
+	if device.Type == "PC" {
+		if device.Status == "occupied" {
+			if user := getUserByID(device.UserID); user != nil {
+				nameText = firstLast(user.Name)
 			}
 		}
-		imagePath := filepath.Join(imgBaseDir, base)
-		icon := canvas.NewImageFromFile(imagePath)
-		icon.FillMode = canvas.ImageFillContain
-		icon.SetMinSize(fyne.NewSize(size, size))
-		icon.Resize(fyne.NewSize(size, size))
-		icon.Move(fyne.NewPos(center.X-size/2, center.Y-size/2))
-		r.objects = append(r.objects, icon)
-
-		// Name(s) under the icon
-		var nameText string
-		if d.Type == "PC" {
-			if d.Status == "occupied" {
-				if u := getUserByID(d.UserID); u != nil {
-					nameText = firstLast(u.Name)
-				}
+	} else {
+		deviceUsers := usersOnDevice(device.ID)
+		if len(deviceUsers) > 0 {
+			names := make([]string, 0, len(deviceUsers))
+			for _, deviceUser := range deviceUsers {
+				names = append(names, firstLast(deviceUser.Name))
 			}
-		} else { // console
-			us := usersOnDevice(d.ID)
-			if len(us) > 0 {
-				names := []string{}
-				for _, u := range us {
-					names = append(names, firstLast(u.Name))
-				}
-				nameText = strings.Join(names, ", ")
-			}
-		}
-		if nameText != "" {
-			txt := canvas.NewText(nameText, theme.ForegroundColor())
-			txt.Alignment = fyne.TextAlignCenter
-			txt.TextSize = 12
-			txt.Move(fyne.NewPos(center.X-txt.MinSize().Width/2, center.Y+size/2-2))
-			r.objects = append(r.objects, txt)
-			// device id just below the name, smaller
-			idTxt := canvas.NewText(fmt.Sprintf("%d", d.ID), color.NRGBA{A: 255, R: 150, G: 150, B: 160})
-			idTxt.Alignment = fyne.TextAlignCenter
-			idTxt.TextSize = 10
-			idTxt.Move(fyne.NewPos(center.X-idTxt.MinSize().Width/2, center.Y+size/2+14))
-			r.objects = append(r.objects, idTxt)
-		} else {
-			// only device label
-			lbl := canvas.NewText(strconv.Itoa(d.ID), theme.ForegroundColor())
-			lbl.Alignment = fyne.TextAlignCenter
-			lbl.TextStyle.Bold = true
-			lbl.TextSize = 12
-			lbl.Move(fyne.NewPos(center.X-lbl.MinSize().Width/2, center.Y+size/2-2))
-			r.objects = append(r.objects, lbl)
+			nameText = strings.Join(names, ", ")
 		}
 	}
-	canvas.Refresh(r.widget)
+
+	if nameText != "" {
+		visual.primary.Text = nameText
+		visual.primary.TextStyle = fyne.TextStyle{}
+		visual.primary.TextSize = 12
+		visual.primary.Refresh()
+		visual.primary.Move(fyne.NewPos(center.X-visual.primary.MinSize().Width/2, center.Y+size/2-4))
+		visual.primary.Show()
+
+		visual.secondary.Text = fmt.Sprintf("%d", device.ID)
+		visual.secondary.Refresh()
+		visual.secondary.Move(fyne.NewPos(center.X-visual.secondary.MinSize().Width/2, center.Y+size/2+12))
+		visual.secondary.Show()
+	} else {
+		visual.primary.Text = strconv.Itoa(device.ID)
+		visual.primary.TextStyle = fyne.TextStyle{Bold: true}
+		visual.primary.TextSize = 12
+		visual.primary.Refresh()
+		visual.primary.Move(fyne.NewPos(center.X-visual.primary.MinSize().Width/2, center.Y+size/2-4))
+		visual.primary.Show()
+
+		visual.secondary.Hide()
+	}
 }
 
-func (r *deviceStatusRenderer) Objects() []fyne.CanvasObject { return r.objects }
-func (r *deviceStatusRenderer) Destroy()                     {}
-
-func (w *DeviceStatusLayoutWidget) CreateRenderer() fyne.WidgetRenderer {
-	w.computeSlots()
-	return &deviceStatusRenderer{widget: w}
+func (renderer *deviceStatusRenderer) imageNameForDevice(device Device) string {
+	if device.Status == "free" {
+		if device.Type == "PC" {
+			return "free.png"
+		}
+		return "console.png"
+	}
+	if device.Type == "PC" {
+		return "busy.png"
+	}
+	return "console_busy.png"
 }
 
-func (w *DeviceStatusLayoutWidget) nearestSlot(p fyne.Position) int {
-	if len(w.slotPositions) == 0 {
+func (layoutWidget *DeviceStatusLayoutWidget) CreateRenderer() fyne.WidgetRenderer {
+	layoutWidget.computeSlots()
+	renderer := &deviceStatusRenderer{
+		widget:  layoutWidget,
+		visuals: make(map[int]*deviceVisual),
+	}
+	for _, device := range allDevices {
+		visual := renderer.newVisualForDevice(device)
+		renderer.visuals[device.ID] = visual
+		renderer.objects = append(renderer.objects, visual.icon, visual.primary, visual.secondary)
+	}
+	return renderer
+}
+
+func (layoutWidget *DeviceStatusLayoutWidget) nearestSlot(position fyne.Position) int {
+	if len(layoutWidget.slotPositions) == 0 {
 		return -1
 	}
-	best := -1
-	bestDist := math.MaxFloat64
-	for i, s := range w.slotPositions {
-		dx := float64(s.X - p.X)
-		dy := float64(s.Y - p.Y)
-		dist := dx*dx + dy*dy
-		if dist < bestDist {
-			bestDist = dist
-			best = i
+	bestSlot := -1
+	bestDistance := math.MaxFloat64
+	for index, slotPosition := range layoutWidget.slotPositions {
+		deltaX := float64(slotPosition.X - position.X)
+		deltaY := float64(slotPosition.Y - position.Y)
+		distance := deltaX*deltaX + deltaY*deltaY
+		if distance < bestDistance {
+			bestDistance = distance
+			bestSlot = index
 		}
 	}
-	return best
+	return bestSlot
 }
-
-// ---------- Logs & members ----------
 
 func ensureLogDir() error { return os.MkdirAll(logDir, 0o755) }
 
@@ -630,18 +744,18 @@ func readDailyLogEntries() ([]LogEntry, error) {
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		return []LogEntry{}, nil
 	}
-	f, err := os.Open(p)
+	logFile, err := os.Open(p)
 	if err != nil {
 		return nil, fmt.Errorf("open log: %s: %w", p, err)
 	}
-	defer f.Close()
-	b, err := io.ReadAll(f)
+	defer logFile.Close()
+	fileData, err := io.ReadAll(logFile)
 	if err != nil {
 		return nil, fmt.Errorf("read log: %s: %w", p, err)
 	}
 	var entries []LogEntry
-	if len(b) > 0 {
-		if err := json.Unmarshal(b, &entries); err != nil {
+	if len(fileData) > 0 {
+		if err := json.Unmarshal(fileData, &entries); err != nil {
 			return nil, fmt.Errorf("unmarshal log: %s: %w", p, err)
 		}
 	}
@@ -780,8 +894,6 @@ func buildLogView() fyne.CanvasObject {
 	return container.NewScroll(logTable)
 }
 
-// ---------- Left-anchored responsive layout ----------
-
 type leftRatioLayout struct {
 	ratio float32
 	minW  float32
@@ -815,7 +927,55 @@ func (l *leftRatioLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return min
 }
 
-// ---------- Inline check-in (with search) ----------
+type twoPaneLayout struct {
+	leftRatio float32
+	leftMin   float32
+	leftMax   float32
+}
+
+func (l *twoPaneLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) < 2 {
+		return
+	}
+	leftWidth := size.Width * l.leftRatio
+	if l.leftMin > 0 && leftWidth < l.leftMin {
+		leftWidth = l.leftMin
+	}
+	if l.leftMax > 0 && leftWidth > l.leftMax {
+		leftWidth = l.leftMax
+	}
+	if leftWidth > size.Width {
+		leftWidth = size.Width
+	}
+	left := objects[0]
+	right := objects[1]
+	left.Resize(fyne.NewSize(leftWidth, size.Height))
+	left.Move(fyne.NewPos(0, 0))
+	rightWidth := size.Width - leftWidth
+	if rightWidth < 0 {
+		rightWidth = 0
+	}
+	right.Resize(fyne.NewSize(rightWidth, size.Height))
+	right.Move(fyne.NewPos(leftWidth, 0))
+}
+
+func (l *twoPaneLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) < 2 {
+		return fyne.NewSize(0, 0)
+	}
+	leftMin := objects[0].MinSize()
+	rightMin := objects[1].MinSize()
+	requiredLeft := leftMin.Width
+	if l.leftMin > 0 && requiredLeft < l.leftMin {
+		requiredLeft = l.leftMin
+	}
+	width := requiredLeft + rightMin.Width
+	height := leftMin.Height
+	if rightMin.Height > height {
+		height = rightMin.Height
+	}
+	return fyne.NewSize(width, height)
+}
 
 func buildInlineCheckInForm() *fyne.Container {
 	checkInNameEntry = widget.NewEntry()
@@ -941,19 +1101,17 @@ func buildPendingQueueView() fyne.CanvasObject {
 	return container.NewVBox(header, assignmentNoticeLabel, scroll)
 }
 
-// ---------- Members CSV ----------
-
 func loadMembers() {
-	f, err := os.Open(memberFile)
+	memberHandle, err := os.Open(memberFile)
 	if err != nil {
 		members = nil
 		return
 	}
-	defer f.Close()
+	defer memberHandle.Close()
 
-	r := csv.NewReader(f)
-	r.FieldsPerRecord = -1
-	rows, err := r.ReadAll()
+	memberReader := csv.NewReader(memberHandle)
+	memberReader.FieldsPerRecord = -1
+	rows, err := memberReader.ReadAll()
 	if err != nil || len(rows) == 0 {
 		members = nil
 		return
@@ -998,41 +1156,41 @@ func loadMembers() {
 
 func getNextMemberID() string { return strconv.Itoa(len(members) + 1) }
 
-func appendMember(m Member) {
-	f, err := os.OpenFile(memberFile, os.O_RDWR|os.O_CREATE, 0o644)
+func appendMember(member Member) {
+	memberHandle, err := os.OpenFile(memberFile, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		fmt.Println("Error opening member file:", err)
 		return
 	}
-	defer f.Close()
+	defer memberHandle.Close()
 
-	r := csv.NewReader(f)
-	rows, readErr := r.ReadAll()
+	memberReader := csv.NewReader(memberHandle)
+	rows, readErr := memberReader.ReadAll()
 	if readErr != nil && readErr != io.EOF {
 		fmt.Println("Error reading CSV:", readErr)
 		return
 	}
 
-	f.Seek(0, 0)
-	f.Truncate(0)
+	memberHandle.Seek(0, 0)
+	memberHandle.Truncate(0)
 
-	w := csv.NewWriter(f)
+	memberWriter := csv.NewWriter(memberHandle)
 	for _, row := range rows {
-		if err := w.Write(row); err != nil {
+		if err := memberWriter.Write(row); err != nil {
 			fmt.Println("Error writing row:", err)
 			return
 		}
 	}
-	newRow := []string{"", "", m.Name, m.ID}
-	if err := w.Write(newRow); err != nil {
+	newRow := []string{"", "", member.Name, member.ID}
+	if err := memberWriter.Write(newRow); err != nil {
 		fmt.Println("Error writing new member:", err)
 		return
 	}
-	w.Flush()
-	if err := w.Error(); err != nil {
+	memberWriter.Flush()
+	if err := memberWriter.Error(); err != nil {
 		fmt.Println("Error flushing writer:", err)
 	}
-	members = append(members, m)
+	members = append(members, member)
 }
 
 func memberByID(id string) *Member {
@@ -1043,8 +1201,6 @@ func memberByID(id string) *Member {
 	}
 	return nil
 }
-
-// ---------- Data init & helpers ----------
 
 func initData() {
 	ensureLogDir()
@@ -1057,16 +1213,16 @@ func initData() {
 
 	activeUsers = []User{}
 	if _, err := os.Stat(userDataFile); !os.IsNotExist(err) {
-		if f, e := os.Open(userDataFile); e == nil {
-			defer f.Close()
-			if json.NewDecoder(f).Decode(&activeUsers) == nil {
+		if userDataHandle, openErr := os.Open(userDataFile); openErr == nil {
+			defer userDataHandle.Close()
+			if json.NewDecoder(userDataHandle).Decode(&activeUsers) == nil {
 				for i := range activeUsers {
-					u := &activeUsers[i]
+					userRecord := &activeUsers[i]
 					for j := range allDevices {
-						if allDevices[j].ID == u.PCID {
+						if allDevices[j].ID == userRecord.PCID {
 							allDevices[j].Status = "occupied"
 							if allDevices[j].Type == "PC" {
-								allDevices[j].UserID = u.ID
+								allDevices[j].UserID = userRecord.ID
 							}
 							break
 						}
@@ -1082,13 +1238,13 @@ func initData() {
 
 func saveData() {
 	ensureLogDir()
-	f, err := os.Create(userDataFile)
+	userDataHandle, err := os.Create(userDataFile)
 	if err != nil {
 		fmt.Println("Error creating user data file:", err)
 		return
 	}
-	defer f.Close()
-	if err := json.NewEncoder(f).Encode(activeUsers); err != nil {
+	defer userDataHandle.Close()
+	if err := json.NewEncoder(userDataHandle).Encode(activeUsers); err != nil {
 		fmt.Println("Error encoding user data:", err)
 	}
 }
@@ -1273,8 +1429,6 @@ func getPendingUsers() []User {
 	return out
 }
 
-// ---------- Console checkout selection ----------
-
 func showConsoleCheckoutDialog(d Device) {
 	userIDs := activeUserIDsOnDevice(d.ID)
 	if len(userIDs) == 0 {
@@ -1317,15 +1471,11 @@ func showConsoleCheckoutDialog(d Device) {
 	dlg.Show()
 }
 
-// ---------- Device room (only layout + bottom queue) ----------
-
 func buildDeviceRoomContent() fyne.CanvasObject {
-	// device area (right)
 	layoutWidget := NewDeviceStatusLayoutWidget()
 	layoutWidget.UpdateDevices()
 
-	// left column: queue check-in + queued icons
-	checkInInlineForm = buildInlineCheckInForm() // keep visible
+	checkInInlineForm = buildInlineCheckInForm()
 	queueView := buildPendingQueueView()
 
 	leftPane := container.NewVBox(
@@ -1333,18 +1483,9 @@ func buildDeviceRoomContent() fyne.CanvasObject {
 		widget.NewSeparator(),
 		queueView,
 	)
-	// keep a sensible min width for the left side and allow scrolling if needed
 	leftScroll := container.NewVScroll(container.NewPadded(leftPane))
-	leftScroll.SetMinSize(fyne.NewSize(340, 0))
-
-	// side-by-side: left column (check-in) and right (PC layout)
-	split := container.NewHSplit(leftScroll, layoutWidget)
-	split.Offset = 0.30 // ~30% left column
-
-	return split
+	return container.New(&twoPaneLayout{leftRatio: 0.30, leftMin: 340, leftMax: 520}, leftScroll, layoutWidget)
 }
-
-// ---------- Dialog-based check-in (reused) ----------
 
 func showCheckInDialogShared(deviceID int, fixed bool) {
 	const (
@@ -1487,14 +1628,7 @@ func showCheckInDialogShared(deviceID int, fixed bool) {
 	dlg.Show()
 }
 
-func showCheckInDialog() {
-	if checkInInlineForm != nil {
-		checkInInlineForm.Show()
-		if mainWindow != nil && checkInNameEntry != nil {
-			mainWindow.Canvas().Focus(checkInNameEntry)
-		}
-	}
-}
+func showCheckInDialog() { showCheckInDialogShared(0, false) }
 
 func showCheckOutDialog() {
 	if len(activeUsers) == 0 {
@@ -1547,15 +1681,13 @@ func showCheckOutDialog() {
 	dlg.Show()
 }
 
-// ---------- Main ----------
-
 func main() {
 	initData()
 	_ = os.MkdirAll(imgBaseDir, 0o755)
 
-	app := app.New()
-	app.Settings().SetTheme(NewCatppuccinLatteTheme())
-	mainWindow = app.NewWindow("Lounge Management System")
+	appInstance := app.New()
+	appInstance.Settings().SetTheme(NewCatppuccinLatteTheme())
+	mainWindow = appInstance.NewWindow("Lounge Management System")
 	mainWindow.Resize(fyne.NewSize(1080, 720))
 
 	deviceStatus := buildDeviceRoomContent()
@@ -1633,7 +1765,6 @@ func main() {
 	mainWindow.ShowAndRun()
 }
 
-// ---------- util ----------
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
