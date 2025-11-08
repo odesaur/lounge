@@ -35,6 +35,12 @@ const (
 	queueFile        = "log/queue.json"
 )
 
+const (
+	logSortMostRecent     = "Most Recent"
+	logSortOldest         = "Oldest"
+	logSortLongestSession = "Longest Session"
+)
+
 type User struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
@@ -67,16 +73,19 @@ type LogEntry struct {
 }
 
 var (
-	allDevices        []Device
-	activeUsers       []User
-	members           []Member
-	mainWindow        fyne.Window
-	logList           *widget.List
-	logDateSelect     *widget.Select
-	refreshTrigger    = make(chan bool, 1)
-	logRefreshPending = false
-	logFileMutex      sync.Mutex
-	currentLogEntries []LogEntry
+	allDevices          []Device
+	activeUsers         []User
+	members             []Member
+	mainWindow          fyne.Window
+	logList             *widget.List
+	logDateSelect       *widget.Select
+	logSortSelect       *widget.Select
+	refreshTrigger      = make(chan bool, 1)
+	logRefreshPending   = false
+	logFileMutex        sync.Mutex
+	currentLogEntries   []LogEntry
+	displayedLogEntries []LogEntry
+	currentLogSort      = logSortMostRecent
 
 	assignmentUserID         string
 	assignmentNoticeLabel    *widget.Label
@@ -1213,6 +1222,7 @@ func recordLogEvent(isCheckIn bool, u User, deviceID int, original *time.Time) {
 	}
 	fyne.Do(func() {
 		currentLogEntries = entries
+		refreshDisplayedLogEntries()
 		if logList != nil {
 			logList.Refresh()
 			logRefreshPending = false
@@ -1257,7 +1267,69 @@ func updateCurrentLogEntriesCache() {
 	} else {
 		currentLogEntries = entries
 	}
+	refreshDisplayedLogEntries()
 	refreshLogDateOptions()
+}
+
+func refreshDisplayedLogEntries() {
+	if len(currentLogEntries) == 0 {
+		displayedLogEntries = []LogEntry{}
+		return
+	}
+	displayedLogEntries = make([]LogEntry, len(currentLogEntries))
+	copy(displayedLogEntries, currentLogEntries)
+	sortLogEntries(displayedLogEntries, currentLogSort)
+}
+
+func setLogSort(sortOption string) {
+	if sortOption == "" {
+		sortOption = logSortMostRecent
+	}
+	currentLogSort = sortOption
+	refreshDisplayedLogEntries()
+	if logSortSelect != nil && logSortSelect.Selected != sortOption {
+		logSortSelect.Selected = sortOption
+		logSortSelect.Refresh()
+	}
+	if logList != nil {
+		logList.Refresh()
+	}
+}
+
+func sortLogEntries(entries []LogEntry, sortOption string) {
+	switch sortOption {
+	case logSortOldest:
+		sort.SliceStable(entries, func(i, j int) bool {
+			return logEntryActivityTime(entries[i]).Before(logEntryActivityTime(entries[j]))
+		})
+	case logSortLongestSession:
+		sort.SliceStable(entries, func(i, j int) bool {
+			di := logEntrySessionDuration(entries[i])
+			dj := logEntrySessionDuration(entries[j])
+			if di == dj {
+				return logEntryActivityTime(entries[i]).After(logEntryActivityTime(entries[j]))
+			}
+			return di > dj
+		})
+	default:
+		sort.SliceStable(entries, func(i, j int) bool {
+			return logEntryActivityTime(entries[i]).After(logEntryActivityTime(entries[j]))
+		})
+	}
+}
+
+func logEntryActivityTime(entry LogEntry) time.Time {
+	if !entry.CheckOutTime.IsZero() {
+		return entry.CheckOutTime
+	}
+	return entry.CheckInTime
+}
+
+func logEntrySessionDuration(entry LogEntry) time.Duration {
+	if !entry.CheckOutTime.IsZero() {
+		return entry.CheckOutTime.Sub(entry.CheckInTime)
+	}
+	return time.Since(entry.CheckInTime)
 }
 
 func listAvailableLogDates() []string {
@@ -1309,14 +1381,14 @@ func setLogDate(date string) {
 func buildLogView() fyne.CanvasObject {
 	updateCurrentLogEntriesCache()
 	logList = widget.NewList(
-		func() int { return len(currentLogEntries) },
+		func() int { return len(displayedLogEntries) },
 		func() fyne.CanvasObject { return newLogEntryCard() },
 		func(i widget.ListItemID, o fyne.CanvasObject) {
-			if i < 0 || i >= len(currentLogEntries) {
+			if i < 0 || i >= len(displayedLogEntries) {
 				return
 			}
 			card := o.(*logEntryCard)
-			card.SetEntry(currentLogEntries[i])
+			card.SetEntry(displayedLogEntries[i])
 		},
 	)
 	logRefreshPending = false
@@ -1330,7 +1402,13 @@ func buildLogView() fyne.CanvasObject {
 	})
 	logDateSelect.PlaceHolder = "Select date"
 	logDateSelect.Selected = selectedLogDate
-	toolbar := container.NewHBox(header, layout.NewSpacer(), logDateSelect)
+	sortOptions := []string{logSortMostRecent, logSortOldest, logSortLongestSession}
+	logSortSelect = widget.NewSelect(sortOptions, func(val string) {
+		setLogSort(val)
+	})
+	logSortSelect.PlaceHolder = "Sort logs"
+	logSortSelect.Selected = currentLogSort
+	toolbar := container.NewHBox(header, layout.NewSpacer(), logDateSelect, logSortSelect)
 	return container.NewBorder(toolbar, nil, nil, nil, logList)
 }
 
@@ -2005,6 +2083,7 @@ func assignQueuedUserToDevice(userID string, deviceID int) error {
 		}
 		_ = writeDailyLogEntries(entries)
 		currentLogEntries = entries
+		refreshDisplayedLogEntries()
 	}
 	logFileMutex.Unlock()
 
@@ -2064,6 +2143,7 @@ func switchUserDevice(userID string, targetDeviceID int) error {
 		}
 		_ = writeDailyLogEntries(entries)
 		currentLogEntries = entries
+		refreshDisplayedLogEntries()
 	}
 	logFileMutex.Unlock()
 
@@ -2466,6 +2546,7 @@ func main() {
 		if logTabActive {
 			updateCurrentLogEntriesCache()
 			if logList != nil {
+				refreshDisplayedLogEntries()
 				logList.Refresh()
 				logRefreshPending = false
 			}
@@ -2493,6 +2574,7 @@ func main() {
 						lastDate = current
 						updateCurrentLogEntriesCache()
 						if logList != nil {
+							refreshDisplayedLogEntries()
 							logList.Refresh()
 						}
 						logRefreshPending = true
@@ -2501,6 +2583,7 @@ func main() {
 			case <-liveLogTicker.C:
 				fyne.Do(func() {
 					if logTabActive && logList != nil {
+						refreshDisplayedLogEntries()
 						logList.Refresh()
 					}
 					updatePendingIconTimes()
@@ -2511,6 +2594,7 @@ func main() {
 					tabs.Items[0].Content = buildDeviceRoomContent()
 					tabs.Refresh()
 					if logList != nil {
+						refreshDisplayedLogEntries()
 						logList.Refresh()
 					}
 					if mainWindow != nil && mainWindow.Content() != nil {
