@@ -422,8 +422,7 @@ func updatePendingIconTimes() {
 type DeviceStatusLayoutWidget struct {
 	widget.BaseWidget
 	containerSize    fyne.Size
-	slotPositions    []fyne.Position
-	deviceToSlot     map[int]int
+	devicePositions  map[int]fyne.Position // normalized 0-1 coords
 	draggingDeviceID int
 	dragOffset       fyne.Position
 	isDragging       bool
@@ -438,7 +437,7 @@ type DeviceStatusLayoutWidget struct {
 
 func NewDeviceStatusLayoutWidget() *DeviceStatusLayoutWidget {
 	layoutWidget := &DeviceStatusLayoutWidget{
-		deviceToSlot:    make(map[int]int),
+		devicePositions: make(map[int]fyne.Position),
 		pcIconSize:      64,
 		consoleIconSize: 64,
 		slotMargin:      24,
@@ -448,36 +447,47 @@ func NewDeviceStatusLayoutWidget() *DeviceStatusLayoutWidget {
 	return layoutWidget
 }
 
-func (layoutWidget *DeviceStatusLayoutWidget) defaultOrder() []int {
-	return []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18}
+// defaultPositions returns the room-layout default normalized positions (0–1)
+// for all 18 devices, matching the physical arrangement in the lounge.
+func (layoutWidget *DeviceStatusLayoutWidget) defaultPositions() map[int]fyne.Position {
+	cols := []float32{0.11, 0.28, 0.46, 0.63}
+	topRows := []float32{0.28, 0.42}
+	btmRows := []float32{0.64, 0.79}
+	conX := float32(0.87)
+	return map[int]fyne.Position{
+		// top group (PCs 9-16)
+		16: {X: cols[0], Y: topRows[0]},
+		15: {X: cols[1], Y: topRows[0]},
+		14: {X: cols[2], Y: topRows[0]},
+		13: {X: cols[3], Y: topRows[0]},
+		9:  {X: cols[0], Y: topRows[1]},
+		10: {X: cols[1], Y: topRows[1]},
+		11: {X: cols[2], Y: topRows[1]},
+		12: {X: cols[3], Y: topRows[1]},
+		// bottom group (PCs 1-8)
+		8: {X: cols[0], Y: btmRows[0]},
+		7: {X: cols[1], Y: btmRows[0]},
+		6: {X: cols[2], Y: btmRows[0]},
+		5: {X: cols[3], Y: btmRows[0]},
+		1: {X: cols[0], Y: btmRows[1]},
+		2: {X: cols[1], Y: btmRows[1]},
+		3: {X: cols[2], Y: btmRows[1]},
+		4: {X: cols[3], Y: btmRows[1]},
+		// consoles (right side)
+		17: {X: conX, Y: 0.28}, // XBOX
+		18: {X: conX, Y: 0.68}, // PS4
+	}
 }
 
-func (layoutWidget *DeviceStatusLayoutWidget) ensureMapping() {
-	if len(layoutWidget.deviceToSlot) == len(allDevices) {
-		return
-	}
-	seen := make(map[int]bool)
-	for deviceID := range layoutWidget.deviceToSlot {
-		seen[deviceID] = true
-	}
-	order := layoutWidget.defaultOrder()
-	slotIndex := 0
-	occupiedSlots := make(map[int]bool)
-	for _, slot := range layoutWidget.deviceToSlot {
-		occupiedSlots[slot] = true
-	}
-	for _, deviceID := range order {
-		if seen[deviceID] {
-			continue
-		}
-		for {
-			if !occupiedSlots[slotIndex] {
-				layoutWidget.deviceToSlot[deviceID] = slotIndex
-				occupiedSlots[slotIndex] = true
-				slotIndex++
-				break
+func (layoutWidget *DeviceStatusLayoutWidget) ensurePositions() {
+	defaults := layoutWidget.defaultPositions()
+	for _, device := range allDevices {
+		if _, ok := layoutWidget.devicePositions[device.ID]; !ok {
+			if def, ok2 := defaults[device.ID]; ok2 {
+				layoutWidget.devicePositions[device.ID] = def
+			} else {
+				layoutWidget.devicePositions[device.ID] = fyne.NewPos(0.05, 0.05)
 			}
-			slotIndex++
 		}
 	}
 }
@@ -486,139 +496,81 @@ func (layoutWidget *DeviceStatusLayoutWidget) loadDeviceLayout() {
 	_ = ensureLogDir()
 	data, err := os.ReadFile(deviceLayoutFile)
 	if err != nil || len(data) == 0 {
-		layoutWidget.deviceToSlot = make(map[int]int)
-		layoutWidget.ensureMapping()
+		layoutWidget.devicePositions = make(map[int]fyne.Position)
+		layoutWidget.ensurePositions()
 		layoutWidget.saveDeviceLayout()
 		return
 	}
-	type layoutEntry struct{ DeviceID, Slot int }
+	type layoutEntry struct {
+		DeviceID int
+		X, Y     float32
+	}
 	var entries []layoutEntry
 	if json.Unmarshal(data, &entries) != nil {
-		layoutWidget.deviceToSlot = make(map[int]int)
-		layoutWidget.ensureMapping()
+		layoutWidget.devicePositions = make(map[int]fyne.Position)
+		layoutWidget.ensurePositions()
 		layoutWidget.saveDeviceLayout()
 		return
 	}
-	layoutWidget.deviceToSlot = make(map[int]int)
+	layoutWidget.devicePositions = make(map[int]fyne.Position)
+	allZero := true
 	for _, entry := range entries {
-		layoutWidget.deviceToSlot[entry.DeviceID] = entry.Slot
+		layoutWidget.devicePositions[entry.DeviceID] = fyne.NewPos(entry.X, entry.Y)
+		if entry.X != 0 || entry.Y != 0 {
+			allZero = false
+		}
 	}
-	layoutWidget.ensureMapping()
+	// If all positions are zero it's probably an old slot-format file; reset to defaults.
+	if allZero {
+		layoutWidget.devicePositions = make(map[int]fyne.Position)
+	}
+	layoutWidget.ensurePositions()
 }
 
 func (layoutWidget *DeviceStatusLayoutWidget) saveDeviceLayout() {
-	type layoutEntry struct{ DeviceID, Slot int }
-	entries := make([]layoutEntry, 0, len(layoutWidget.deviceToSlot))
-	for deviceID, slot := range layoutWidget.deviceToSlot {
-		entries = append(entries, layoutEntry{DeviceID: deviceID, Slot: slot})
+	type layoutEntry struct {
+		DeviceID int
+		X, Y     float32
+	}
+	entries := make([]layoutEntry, 0, len(layoutWidget.devicePositions))
+	for deviceID, pos := range layoutWidget.devicePositions {
+		entries = append(entries, layoutEntry{DeviceID: deviceID, X: pos.X, Y: pos.Y})
 	}
 	data, _ := json.MarshalIndent(entries, "", "  ")
 	_ = os.WriteFile(deviceLayoutFile, data, 0o644)
 }
 
-func (layoutWidget *DeviceStatusLayoutWidget) computeSlots() {
+// computeIconSizes derives pcIconSize / consoleIconSize from the current container.
+func (layoutWidget *DeviceStatusLayoutWidget) computeIconSizes() {
 	if layoutWidget.containerSize.IsZero() {
 		return
 	}
-	layoutWidget.slotPositions = layoutWidget.slotPositions[:0]
-	total := len(allDevices)
-	if total == 0 {
-		return
-	}
-
-	pcCount := 0
-	consoleCount := 0
-	for _, device := range allDevices {
-		if device.Type == "PC" {
-			pcCount++
-		} else {
-			consoleCount++
-		}
-	}
-
-	availableWidth := layoutWidget.containerSize.Width - layoutWidget.slotMargin*2
-	if availableWidth <= 0 {
-		availableWidth = layoutWidget.containerSize.Width
-	}
-	if availableWidth <= 0 {
-		availableWidth = 400
-	}
-	consoleAreaWidth := clampFloat(layoutWidget.containerSize.Width*0.18, 130, 220)
-	if pcCount == 0 {
-		consoleAreaWidth = 0
-	}
-	pcAreaWidth := availableWidth - consoleAreaWidth - layoutWidget.slotMargin
-	maxColumns := 4
-	if pcAreaWidth < float32(maxColumns)*70 {
-		consoleAreaWidth = clampFloat(layoutWidget.containerSize.Width*0.12, 100, 140)
-		pcAreaWidth = availableWidth - consoleAreaWidth
-	}
-	if pcAreaWidth < float32(maxColumns)*60 {
-		consoleAreaWidth = 0
-		pcAreaWidth = availableWidth
-	}
-	if pcAreaWidth <= 0 {
-		pcAreaWidth = availableWidth
-	}
-
-	columnWidth := pcAreaWidth / float32(maxColumns)
-	if columnWidth <= 0 {
-		columnWidth = 80
-	}
-
-	rowCounts := []int{3, 3, 3, 3, 4}
-	totalRows := len(rowCounts)
-	availableHeight := layoutWidget.containerSize.Height - layoutWidget.slotMargin*2
-	if availableHeight <= 0 {
-		availableHeight = layoutWidget.containerSize.Height
-	}
-	if availableHeight <= 0 {
-		availableHeight = float32(totalRows) * 120
-	}
-	rowHeight := availableHeight / float32(totalRows)
-	if rowHeight <= 0 {
-		rowHeight = 120
-	}
-
-	iconBase := float32(math.Min(float64(columnWidth), float64(rowHeight))) * 0.55
+	// Assume ~4 columns across ~75% of width and ~5 rows tall.
+	colW := layoutWidget.containerSize.Width * 0.18
+	rowH := layoutWidget.containerSize.Height * 0.16
+	iconBase := float32(math.Min(float64(colW), float64(rowH))) * 0.55
 	layoutWidget.pcIconSize = clampFloat(iconBase, 40, 96)
 	layoutWidget.consoleIconSize = clampFloat(iconBase*1.05, 48, 104)
+}
 
-	gridOriginX := layoutWidget.slotMargin + (pcAreaWidth-columnWidth*float32(maxColumns))/2
-	if gridOriginX < layoutWidget.slotMargin {
-		gridOriginX = layoutWidget.slotMargin
+// normalizePos converts an absolute widget-relative position to 0-1 coords.
+func (layoutWidget *DeviceStatusLayoutWidget) normalizePos(pos fyne.Position) fyne.Position {
+	w := layoutWidget.containerSize.Width
+	h := layoutWidget.containerSize.Height
+	if w <= 0 {
+		w = 1
 	}
+	if h <= 0 {
+		h = 1
+	}
+	x := clampFloat(pos.X/w, 0, 1)
+	y := clampFloat(pos.Y/h, 0, 1)
+	return fyne.NewPos(x, y)
+}
 
-	added := 0
-	for rowIndex, cols := range rowCounts {
-		if added >= pcCount {
-			break
-		}
-		centerY := layoutWidget.slotMargin + rowHeight*float32(rowIndex) + rowHeight/2
-		rowStart := gridOriginX + (float32(maxColumns-cols)*columnWidth)/2
-		for col := 0; col < cols && added < pcCount; col++ {
-			centerX := rowStart + columnWidth*float32(col) + columnWidth/2
-			layoutWidget.slotPositions = append(layoutWidget.slotPositions, fyne.NewPos(centerX, centerY))
-			added++
-		}
-	}
-
-	consoleX := layoutWidget.containerSize.Width - layoutWidget.slotMargin - consoleAreaWidth/2
-	if consoleAreaWidth == 0 {
-		consoleX = layoutWidget.containerSize.Width - layoutWidget.slotMargin - columnWidth/2
-	}
-	consoleSpacing := layoutWidget.consoleIconSize + 40
-	consoleY := layoutWidget.slotMargin + layoutWidget.consoleIconSize
-	for i := 0; i < consoleCount; i++ {
-		layoutWidget.slotPositions = append(layoutWidget.slotPositions, fyne.NewPos(consoleX, consoleY+float32(i)*consoleSpacing))
-	}
-
-	for len(layoutWidget.slotPositions) < total {
-		layoutWidget.slotPositions = append(layoutWidget.slotPositions, fyne.NewPos(layoutWidget.slotMargin+layoutWidget.pcIconSize, layoutWidget.slotMargin+layoutWidget.pcIconSize))
-	}
-	if len(layoutWidget.slotPositions) > total {
-		layoutWidget.slotPositions = layoutWidget.slotPositions[:total]
-	}
+// absolutePos converts normalized 0-1 coords to absolute widget-relative position.
+func (layoutWidget *DeviceStatusLayoutWidget) absolutePos(norm fyne.Position) fyne.Position {
+	return fyne.NewPos(norm.X*layoutWidget.containerSize.Width, norm.Y*layoutWidget.containerSize.Height)
 }
 
 func clampFloat(value, minValue, maxValue float32) float32 {
@@ -632,7 +584,7 @@ func clampFloat(value, minValue, maxValue float32) float32 {
 }
 
 func (layoutWidget *DeviceStatusLayoutWidget) UpdateDevices() {
-	layoutWidget.ensureMapping()
+	layoutWidget.ensurePositions()
 	layoutWidget.Refresh()
 }
 
@@ -640,6 +592,12 @@ func (layoutWidget *DeviceStatusLayoutWidget) SetLayoutLocked(locked bool) {
 	layoutWidget.layoutLocked = locked
 	layoutWidget.isDragging = false
 	layoutWidget.draggingDeviceID = 0
+	layoutWidget.Refresh()
+}
+
+func (layoutWidget *DeviceStatusLayoutWidget) ResetLayout() {
+	layoutWidget.devicePositions = layoutWidget.defaultPositions()
+	layoutWidget.saveDeviceLayout()
 	layoutWidget.Refresh()
 }
 
@@ -796,24 +754,9 @@ func (layoutWidget *DeviceStatusLayoutWidget) DragEnd() {
 		layoutWidget.Refresh()
 		return
 	}
-	targetSlot := layoutWidget.nearestSlot(layoutWidget.transientDragPos)
-	if targetSlot >= 0 {
-		currentSlot := layoutWidget.deviceToSlot[layoutWidget.draggingDeviceID]
-		if currentSlot != targetSlot {
-			otherDeviceID := -1
-			for deviceID, slot := range layoutWidget.deviceToSlot {
-				if slot == targetSlot {
-					otherDeviceID = deviceID
-					break
-				}
-			}
-			layoutWidget.deviceToSlot[layoutWidget.draggingDeviceID] = targetSlot
-			if otherDeviceID != -1 {
-				layoutWidget.deviceToSlot[otherDeviceID] = currentSlot
-			}
-			layoutWidget.saveDeviceLayout()
-		}
-	}
+	// Free-form layout: store the dropped position directly (normalized).
+	layoutWidget.devicePositions[layoutWidget.draggingDeviceID] = layoutWidget.normalizePos(layoutWidget.transientDragPos)
+	layoutWidget.saveDeviceLayout()
 	layoutWidget.isDragging = false
 	layoutWidget.draggingDeviceID = 0
 	if layoutWidget.swapDragActive {
@@ -838,18 +781,13 @@ func (layoutWidget *DeviceStatusLayoutWidget) handleLockedDrop() {
 }
 
 func (layoutWidget *DeviceStatusLayoutWidget) positionForDevice(deviceID int) fyne.Position {
-	layoutWidget.ensureMapping()
 	if layoutWidget.isDragging && !layoutWidget.layoutLocked && layoutWidget.draggingDeviceID == deviceID {
 		return layoutWidget.transientDragPos
 	}
-	slot := layoutWidget.deviceToSlot[deviceID]
-	if slot >= 0 && slot < len(layoutWidget.slotPositions) {
-		return layoutWidget.slotPositions[slot]
+	if norm, ok := layoutWidget.devicePositions[deviceID]; ok {
+		return layoutWidget.absolutePos(norm)
 	}
-	if len(layoutWidget.slotPositions) == 0 {
-		return fyne.NewPos(layoutWidget.slotMargin+layoutWidget.pcIconSize, layoutWidget.slotMargin+layoutWidget.pcIconSize)
-	}
-	return layoutWidget.slotPositions[slot%len(layoutWidget.slotPositions)]
+	return fyne.NewPos(layoutWidget.slotMargin+layoutWidget.pcIconSize, layoutWidget.slotMargin+layoutWidget.pcIconSize)
 }
 
 func (layoutWidget *DeviceStatusLayoutWidget) iconSizeForDevice(deviceID int) float32 {
@@ -974,7 +912,7 @@ type deviceStatusRenderer struct {
 func (renderer *deviceStatusRenderer) Layout(size fyne.Size) {
 	if renderer.widget.containerSize != size {
 		renderer.widget.containerSize = size
-		renderer.widget.computeSlots()
+		renderer.widget.computeIconSizes()
 	}
 	renderer.Refresh()
 }
@@ -1107,7 +1045,7 @@ func (renderer *deviceStatusRenderer) imageNameForDevice(device Device) string {
 }
 
 func (layoutWidget *DeviceStatusLayoutWidget) CreateRenderer() fyne.WidgetRenderer {
-	layoutWidget.computeSlots()
+	layoutWidget.computeIconSizes()
 	renderer := &deviceStatusRenderer{
 		widget:  layoutWidget,
 		visuals: make(map[int]*deviceVisual),
@@ -1120,23 +1058,6 @@ func (layoutWidget *DeviceStatusLayoutWidget) CreateRenderer() fyne.WidgetRender
 	return renderer
 }
 
-func (layoutWidget *DeviceStatusLayoutWidget) nearestSlot(position fyne.Position) int {
-	if len(layoutWidget.slotPositions) == 0 {
-		return -1
-	}
-	bestSlot := -1
-	bestDistance := math.MaxFloat64
-	for index, slotPosition := range layoutWidget.slotPositions {
-		deltaX := float64(slotPosition.X - position.X)
-		deltaY := float64(slotPosition.Y - position.Y)
-		distance := deltaX*deltaX + deltaY*deltaY
-		if distance < bestDistance {
-			bestDistance = distance
-			bestSlot = index
-		}
-	}
-	return bestSlot
-}
 
 func ensureLogDir() error { return os.MkdirAll(logDir, 0o755) }
 
@@ -2522,8 +2443,17 @@ func main() {
 		}
 		updateLayoutLockButton(lockButton)
 	})
+	resetButton := widget.NewButtonWithIcon("Reset Layout", theme.ViewRestoreIcon(), func() {
+		if deviceLayoutWidget != nil {
+			dialog.ShowConfirm("Reset Layout", "Reset all stations to the default layout?", func(ok bool) {
+				if ok {
+					deviceLayoutWidget.ResetLayout()
+				}
+			}, mainWindow)
+		}
+	})
 	updateLayoutLockButton(lockButton)
-	toolbar := container.NewHBox(checkInButton, checkOutButton, switchButton, lockButton, layout.NewSpacer())
+	toolbar := container.NewHBox(checkInButton, checkOutButton, switchButton, lockButton, resetButton, layout.NewSpacer())
 
 	totalDevicesLabel := widget.NewLabel("")
 	activeUsersLabel := widget.NewLabel("")
