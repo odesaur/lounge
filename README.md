@@ -1,4 +1,4 @@
-```go
+```
                                                  .------.------.    
   +-------------+                     ___        |      |      |    
   |             |                     \ /]       |      |      |    
@@ -20,10 +20,4 @@
 ====================================================================
 ```
 
-Lounge is a small desktop app that helps a shared workspace keep track
-of who is using which device.
-
-```bash
-If you want a lightweight kiosk-style manager for a school lab,
-hackerspace, or club lounge without depending on any cloud services.
-```
+Lounge is a small desktop app that helps a shared workspace keep track of who is using which device
